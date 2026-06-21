@@ -35,7 +35,7 @@ from .utils import (
 )
 from .video_utils import (
     VideoDecoderCache,
-    decode_video_frames_torchcodec,
+    decode_video_frames,
 )
 
 
@@ -252,6 +252,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         rng: np.random.Generator | None = None,
         shuffle: bool = True,
         return_uint8: bool = False,
+        video_backend: str | None = None,
     ):
         """Initialize a StreamingLeRobotDataset.
 
@@ -283,6 +284,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         self.episodes = episodes
         self.tolerance_s = tolerance_s
         self.revision = revision if revision else CODEBASE_VERSION
+        self._video_backend = video_backend if video_backend else get_safe_default_video_backend()
         self.seed = seed
         self.rng = rng if rng is not None else np.random.default_rng(seed)
         self.shuffle = shuffle
@@ -554,11 +556,11 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         for video_key, query_ts in query_timestamps.items():
             root = self.meta.url_root if self.streaming and not self.streaming_from_local else self.root
             video_path = f"{root}/{self.meta.get_video_file_path(ep_idx, video_key)}"
-            frames = decode_video_frames_torchcodec(
+            frames = decode_video_frames(
                 video_path,
                 query_ts,
                 self.tolerance_s,
-                decoder_cache=self.video_decoder_cache,
+                backend=self._video_backend,
                 return_uint8=self._return_uint8,
             )
 

@@ -153,14 +153,19 @@ def main() -> None:
         for key in config.image_features
     }
 
-    dataset = StreamingLeRobotDataset(args.dataset_repo_id, delta_timestamps=delta_timestamps, tolerance_s=1e-3)
+    dataset = StreamingLeRobotDataset(
+        args.dataset_repo_id,
+        delta_timestamps=delta_timestamps,
+        tolerance_s=1e-3,
+    )
+    effective_num_workers = min(args.num_workers, max(1, dataset.num_shards))
     dataloader_kwargs = {
         "batch_size": args.batch_size,
-        "num_workers": args.num_workers,
+        "num_workers": effective_num_workers,
         "pin_memory": device.type != "cpu",
         "drop_last": True,
     }
-    if args.num_workers > 0:
+    if effective_num_workers > 0:
         dataloader_kwargs["prefetch_factor"] = 2
     dataloader = torch.utils.data.DataLoader(dataset, **dataloader_kwargs)
 
