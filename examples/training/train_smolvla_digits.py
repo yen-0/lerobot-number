@@ -26,6 +26,7 @@ from pathlib import Path
 
 import torch
 from datasets import load_dataset
+from torchvision.datasets import MNIST
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
@@ -81,8 +82,16 @@ def _load_mnist_bank(cache_path: Path, examples_per_digit: int) -> dict[int, tor
     if cache_path.exists():
         return torch.load(cache_path, map_location="cpu")
 
-    mnist = load_dataset("mnist", split="train")
-    bank = build_mnist_reference_bank(list(mnist), examples_per_digit=examples_per_digit)
+    try:
+        mnist_root = _resolve_output_path(".cache/mnist")
+        mnist = MNIST(root=mnist_root, train=True, download=True)
+        bank = build_mnist_reference_bank(
+            [{"image": image, "label": label} for image, label in mnist],
+            examples_per_digit=examples_per_digit,
+        )
+    except Exception:
+        mnist = load_dataset("ylecun/mnist", split="train")
+        bank = build_mnist_reference_bank(list(mnist), examples_per_digit=examples_per_digit)
     torch.save(bank, cache_path)
     return bank
 
