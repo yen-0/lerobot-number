@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+cd "${PBS_O_WORKDIR:-$(pwd)}"
+
 DATASET_REPO_ID="${DATASET_REPO_ID:-k1000dai/so101-writei}"
 OUTPUT_DIR="${OUTPUT_DIR:-outputs/train/smolvla_so101_digits}"
 JOB_NAME="${JOB_NAME:-smolvla_so101_digits}"

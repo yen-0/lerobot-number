@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -85,9 +86,23 @@ def _load_mnist_bank(cache_path: Path, examples_per_digit: int) -> dict[int, tor
     return bank
 
 
+def _resolve_workdir() -> Path:
+    workdir = os.environ.get("PBS_O_WORKDIR")
+    if workdir:
+        return Path(workdir).expanduser().resolve()
+    return Path.cwd().resolve()
+
+
+def _resolve_output_path(path: str) -> Path:
+    output_path = Path(path).expanduser()
+    if output_path.is_absolute():
+        return output_path
+    return _resolve_workdir() / output_path
+
+
 def main() -> None:
     args = parse_args()
-    output_dir = Path(args.output_dir)
+    output_dir = _resolve_output_path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     device = torch.device(args.device)
@@ -137,7 +152,11 @@ def main() -> None:
         dataloader_kwargs["prefetch_factor"] = 2
     dataloader = torch.utils.data.DataLoader(dataset, **dataloader_kwargs)
 
-    mnist_cache = Path(args.mnist_cache_dir) if args.mnist_cache_dir else output_dir / "mnist_reference_bank.pt"
+    mnist_cache = (
+        _resolve_output_path(args.mnist_cache_dir)
+        if args.mnist_cache_dir
+        else output_dir / "mnist_reference_bank.pt"
+    )
     digit_bank = _load_mnist_bank(mnist_cache, args.mnist_examples_per_digit)
 
     optimizer = config.get_optimizer_preset().build(policy.parameters())

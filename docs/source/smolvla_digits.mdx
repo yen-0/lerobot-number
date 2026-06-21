@@ -53,6 +53,14 @@ Useful overrides:
 - `--mnist_examples_per_digit 64`
 - `--mnist_cache_dir /tmp/mnist_bank.pt`
 
+If you launch inside PBS or Apptainer, start the job in the submission directory:
+
+```bash
+cd "${PBS_O_WORKDIR:-$(pwd)}"
+```
+
+The example script also resolves relative `--output_dir` and `--mnist_cache_dir` values against `PBS_O_WORKDIR` when it is set.
+
 The training loop logs:
 
 - `action_loss`
