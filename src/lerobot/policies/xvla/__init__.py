@@ -1,5 +1,4 @@
 from .configuration_xvla import XVLAConfig
-from .modeling_xvla import XVLAPolicy
 from .processor_xvla import (
     XVLAAddDomainIdProcessorStep,
     XVLAImageNetNormalizeProcessorStep,
@@ -8,8 +7,15 @@ from .processor_xvla import (
 
 __all__ = [
     "XVLAConfig",
-    "XVLAPolicy",
     "XVLAAddDomainIdProcessorStep",
     "XVLAImageNetNormalizeProcessorStep",
     "XVLAImageToFloatProcessorStep",
 ]
+
+
+def __getattr__(name: str):
+    if name == "XVLAPolicy":
+        from .modeling_xvla import XVLAPolicy
+
+        return XVLAPolicy
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

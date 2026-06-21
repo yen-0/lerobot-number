@@ -30,7 +30,6 @@ from .tdmpc.configuration_tdmpc import TDMPCConfig as TDMPCConfig
 from .utils import make_robot_action, prepare_observation_for_inference
 from .vqbet.configuration_vqbet import VQBeTConfig as VQBeTConfig
 from .wall_x.configuration_wall_x import WallXConfig as WallXConfig
-from .xvla.configuration_xvla import XVLAConfig as XVLAConfig
 
 # NOTE: Policy modeling classes (e.g., GaussianActorPolicy) are intentionally NOT re-exported here.
 # They have heavy optional dependencies and are loaded lazily via get_policy_class().
@@ -52,7 +51,6 @@ __all__ = [
     "TDMPCConfig",
     "VQBeTConfig",
     "WallXConfig",
-    "XVLAConfig",
     # Base class
     "PreTrainedPolicy",
     # RTC utilities
@@ -64,6 +62,10 @@ __all__ = [
 
 
 def __getattr__(name: str):
+    if name == "XVLAConfig":
+        from .xvla.configuration_xvla import XVLAConfig
+
+        return XVLAConfig
     if name in {"get_policy_class", "make_policy", "make_policy_config", "make_pre_post_processors"}:
         from .factory import get_policy_class, make_policy, make_policy_config, make_pre_post_processors
 
