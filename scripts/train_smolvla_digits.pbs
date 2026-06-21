@@ -32,6 +32,7 @@ export HF_DATASETS_CACHE=$HOME/.cache/huggingface/datasets
 export TORCH_HOME=$HOME/.cache/torch
 export TRITON_CACHE_DIR=$HOME/.cache/triton
 export PYTHONPATH=${PYTHONPATH:-}:$(pwd)/src
+export PYTHONUNBUFFERED=1
 
 # Pass environment variables directly into the Apptainer container runtime
 export APPTAINERENV_HF_HOME=$HF_HOME
@@ -40,6 +41,7 @@ export APPTAINERENV_HF_DATASETS_CACHE=$HF_DATASETS_CACHE
 export APPTAINERENV_TORCH_HOME=$TORCH_HOME
 export APPTAINERENV_TRITON_CACHE_DIR=$TRITON_CACHE_DIR
 export APPTAINERENV_PYTHONPATH=$PYTHONPATH
+export APPTAINERENV_PYTHONUNBUFFERED=1
 export APPTAINERENV_PBS_O_WORKDIR="$PBS_O_WORKDIR"
 
 if [[ -n "${HF_TOKEN:-}" ]]; then
@@ -76,11 +78,20 @@ if [[ "${PUSH_TO_HUB:-false}" == "true" ]]; then
   ARGS+=(--push_to_hub --policy.repo_id="${POLICY_REPO_ID}")
 fi
 
+LOG_DIR="${PBS_O_WORKDIR:-$(pwd)}/logs"
+mkdir -p "${LOG_DIR}"
+LOG_FILE="${LOG_DIR}/smolvla_digits_${PBS_JOBID:-manual}_$(date +%Y%m%d_%H%M%S).log"
+
+echo "[$(date -Is)] starting smolvla digits job"
+echo "[$(date -Is)] log file: ${LOG_FILE}"
+echo "[$(date -Is)] apptainer image: ${APPTAINER_IMAGE}"
+echo "[$(date -Is)] args: ${ARGS[*]}"
+
 # 6. Run training inside the GPU container with explicit write permissions
-apptainer exec --nv \
+apptainer --debug exec --nv \
   --bind "${PBS_O_WORKDIR}:${PBS_O_WORKDIR}:rw" \
   --bind "$HOME:$HOME:rw" \
   --writable-tmpfs \
   --pwd "${PBS_O_WORKDIR}" \
   "${APPTAINER_IMAGE}" \
-  python examples/training/train_smolvla_digits.py "${ARGS[@]}"
+  python -u examples/training/train_smolvla_digits.py "${ARGS[@]}" 2>&1 | tee -a "${LOG_FILE}"

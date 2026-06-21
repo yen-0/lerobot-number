@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 import torch
@@ -46,6 +48,7 @@ from lerobot.policies.smolvla.processor_smolvla import make_smolvla_pre_post_pro
 from lerobot.utils.constants import ACTION
 from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.utils.feature_utils import dataset_to_policy_features
+from lerobot.utils.utils import init_logging
 
 
 def parse_args() -> argparse.Namespace:
@@ -115,12 +118,28 @@ def _resolve_output_path(path: str) -> Path:
 
 def main() -> None:
     args = parse_args()
+    init_logging(console_level="INFO", file_level="DEBUG")
+    start_time = time.time()
+
+    logging.info("Starting SmolVLA digit training")
+    logging.info("Arguments: %s", vars(args))
+
     output_dir = _resolve_output_path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    logging.info("Output directory: %s", output_dir)
 
     device = torch.device(args.device)
+    logging.info("Device: %s", device)
     dataset_metadata = LeRobotDatasetMetadata(args.dataset_repo_id)
+    logging.info(
+        "Dataset metadata loaded: repo_id=%s fps=%s episodes=%s frames=%s",
+        args.dataset_repo_id,
+        dataset_metadata.fps,
+        dataset_metadata.total_episodes,
+        dataset_metadata.total_frames,
+    )
     digit_map = load_digit_map(args.digit_map)
+    logging.info("Digit map entries: %d", len(digit_map))
     features = dataset_to_policy_features(dataset_metadata.features)
     output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
     input_features = {key: ft for key, ft in features.items() if key not in output_features}
@@ -138,6 +157,7 @@ def main() -> None:
     policy = SmolVLAPolicy(config)
     policy.train()
     policy.to(device)
+    logging.info("Policy initialized on %s", device)
 
     preprocessor, postprocessor = make_smolvla_pre_post_processors(
         config,
@@ -158,7 +178,14 @@ def main() -> None:
         delta_timestamps=delta_timestamps,
         tolerance_s=1e-3,
     )
+    logging.info(
+        "Streaming dataset ready: shards=%s backend=%s tolerance_s=%s",
+        dataset.num_shards,
+        dataset._video_backend,
+        dataset.tolerance_s,
+    )
     effective_num_workers = min(args.num_workers, max(1, dataset.num_shards))
+    logging.info("DataLoader workers: requested=%s effective=%s", args.num_workers, effective_num_workers)
     dataloader_kwargs = {
         "batch_size": args.batch_size,
         "num_workers": effective_num_workers,
@@ -174,10 +201,14 @@ def main() -> None:
         if args.mnist_cache_dir
         else output_dir / "mnist_reference_bank.pt"
     )
+    logging.info("MNIST cache path: %s", mnist_cache)
     digit_bank = _load_mnist_bank(mnist_cache, args.mnist_examples_per_digit)
+    logging.info("Loaded MNIST digit bank with %d digits", len(digit_bank))
 
     optimizer = config.get_optimizer_preset().build(policy.parameters())
+    logging.info("Optimizer initialized: %s", optimizer.__class__.__name__)
     step = 0
+    last_log_time = time.time()
     while step < args.steps:
         for raw_batch in dataloader:
             processed_batch = preprocessor(_to_device(raw_batch, device))
@@ -199,10 +230,20 @@ def main() -> None:
             optimizer.zero_grad()
 
             if step % args.log_freq == 0:
-                print(json.dumps({"step": step, **loss_dict}, sort_keys=True))
+                now = time.time()
+                logging.info(
+                    "Step %s/%s (%.1fs elapsed, %.1fs since last log)",
+                    step,
+                    args.steps,
+                    now - start_time,
+                    now - last_log_time,
+                )
+                print(json.dumps({"step": step, **loss_dict}, sort_keys=True), flush=True)
+                last_log_time = now
 
             if step > 0 and step % args.save_freq == 0:
                 checkpoint_dir = output_dir / f"checkpoint-{step}"
+                logging.info("Saving checkpoint to %s", checkpoint_dir)
                 policy.save_pretrained(checkpoint_dir)
                 preprocessor.save_pretrained(checkpoint_dir)
                 postprocessor.save_pretrained(checkpoint_dir)
@@ -211,6 +252,7 @@ def main() -> None:
             if step >= args.steps:
                 break
 
+    logging.info("Saving final artifacts to %s", output_dir)
     policy.save_pretrained(output_dir)
     preprocessor.save_pretrained(output_dir)
     postprocessor.save_pretrained(output_dir)
@@ -218,9 +260,12 @@ def main() -> None:
     if args.push_to_hub:
         if not args.policy_repo_id:
             raise ValueError("--policy.repo_id is required when --push_to_hub is set")
+        logging.info("Pushing artifacts to the Hub: %s", args.policy_repo_id)
         policy.push_to_hub(args.policy_repo_id)
         preprocessor.push_to_hub(args.policy_repo_id)
         postprocessor.push_to_hub(args.policy_repo_id)
+
+    logging.info("Training complete in %.1fs", time.time() - start_time)
 
 
 if __name__ == "__main__":
