@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import copy
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import torch
@@ -26,6 +27,7 @@ if TYPE_CHECKING or _transformers_available:
         AutoModel,
         AutoModelForImageTextToText,
         AutoProcessor,
+        AutoTokenizer,
         SmolVLMForConditionalGeneration,
     )
 else:
@@ -33,6 +35,7 @@ else:
     AutoModel = None
     AutoModelForImageTextToText = None
     AutoProcessor = None
+    AutoTokenizer = None
     SmolVLMForConditionalGeneration = None
 
 
@@ -69,6 +72,25 @@ def get_intermediate_size(hidden_dim, ffn_dim_multiplier=4, multiple_of=256):
     return hidden_dim
 
 
+def _load_processor(model_id: str):
+    """Load the full processor when available, otherwise fall back to tokenizer-only metadata."""
+    try:
+        return AutoProcessor.from_pretrained(model_id)
+    except ImportError as exc:
+        if "num2words" not in str(exc):
+            raise
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        tokenizer.fake_image_token = getattr(tokenizer, "fake_image_token", "<fake_token_around_image>")
+        tokenizer.image_token = getattr(tokenizer, "image_token", "<image>")
+        tokenizer.global_image_token = getattr(tokenizer, "global_image_token", "<global-img>")
+        tokenizer.end_of_utterance_token = getattr(tokenizer, "end_of_utterance_token", "<end_of_utterance>")
+        tokenizer.video_token = getattr(tokenizer, "video_token", "<video>")
+        tokenizer.fake_image_token_id = tokenizer.convert_tokens_to_ids(tokenizer.fake_image_token)
+        tokenizer.image_token_id = tokenizer.convert_tokens_to_ids(tokenizer.image_token)
+        tokenizer.global_image_token_id = tokenizer.convert_tokens_to_ids(tokenizer.global_image_token)
+        return SimpleNamespace(tokenizer=tokenizer)
+
+
 class SmolVLMWithExpertModel(nn.Module):
     def __init__(
         self,
@@ -85,7 +107,6 @@ class SmolVLMWithExpertModel(nn.Module):
     ):
         super().__init__()
         require_package("transformers", extra="smolvla")
-        require_package("num2words", extra="smolvla")
         if load_vlm_weights:
             print(f"Loading  {model_id} weights ...")
             self.vlm = AutoModelForImageTextToText.from_pretrained(
@@ -97,7 +118,7 @@ class SmolVLMWithExpertModel(nn.Module):
         else:
             config = AutoConfig.from_pretrained(model_id)
             self.vlm = SmolVLMForConditionalGeneration(config=config)
-        self.processor = AutoProcessor.from_pretrained(model_id)
+        self.processor = _load_processor(model_id)
         if num_vlm_layers > 0:
             print(f"Reducing the number of VLM layers to {num_vlm_layers} ...")
             self.get_vlm_model().text_model.layers = self.get_vlm_model().text_model.layers[:num_vlm_layers]
