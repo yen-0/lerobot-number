@@ -135,6 +135,9 @@ def build_mnist_reference_bank(
         image = row["image"]
         if hasattr(image, "convert"):
             image = np.asarray(image)
+        if isinstance(image, np.ndarray) and not image.flags.writeable:
+            # Some datasets expose read-only image buffers; copy before tensor conversion.
+            image = np.array(image, copy=True)
         image_tensor = torch.as_tensor(image, dtype=torch.float32)
         if image_tensor.ndim == 2:
             image_tensor = image_tensor.unsqueeze(0)

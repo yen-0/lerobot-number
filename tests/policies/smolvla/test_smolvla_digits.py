@@ -14,6 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
+
+import numpy as np
 import torch
 
 from lerobot.configs.types import FeatureType, PolicyFeature
@@ -41,6 +44,35 @@ def test_digit_label_helpers():
     assert samples.shape == (3, 3, 28, 28)
     assert samples[0].sum().item() == 0.0
     assert samples[1].sum().item() > 0.0
+
+
+def test_build_mnist_reference_bank_copies_read_only_arrays():
+    read_only = np.zeros((28, 28), dtype=np.uint8)
+    read_only.setflags(write=False)
+
+    bank = smolvla_mod.build_mnist_reference_bank(
+        [{"label": 0, "image": read_only}],
+        examples_per_digit=1,
+    )
+
+    assert bank[0].shape == (1, 3, 28, 28)
+    assert bank[0].dtype == torch.float32
+    assert bank[0].max().item() == 0.0
+
+
+def test_prepare_digit_reference_images_copies_read_only_arrays():
+    read_only = np.zeros((28, 28, 3), dtype=np.uint8)
+    read_only.setflags(write=False)
+
+    policy = smolvla_mod.SmolVLAPolicy.__new__(smolvla_mod.SmolVLAPolicy)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        images = policy._prepare_digit_reference_images([read_only], device=torch.device("cpu"))
+
+    assert not caught
+    assert images.shape == (1, 3, 28, 28)
+    assert images.dtype == torch.float32
+    assert images.max().item() == 0.0
 
 
 def test_digit_label_processor_uses_task_text():

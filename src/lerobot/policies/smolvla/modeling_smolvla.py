@@ -56,6 +56,7 @@ import math
 from collections import deque
 from typing import Any, TypedDict, Unpack
 
+import numpy as np
 import torch
 import torch.nn.functional as F  # noqa: N812
 from torch import Tensor, nn
@@ -415,10 +416,20 @@ class SmolVLAPolicy(PreTrainedPolicy):
     def _prepare_digit_reference_images(self, images: Any, device: torch.device) -> Tensor:
         """Normalize the auxiliary digit reference image batch."""
 
+        def _to_tensor(image: Any) -> Tensor:
+            if isinstance(image, torch.Tensor):
+                return image
+            if hasattr(image, "convert"):
+                image = np.asarray(image)
+            if isinstance(image, np.ndarray) and not image.flags.writeable:
+                # Some dataset/image loaders expose read-only buffers; copy before tensor conversion.
+                image = np.array(image, copy=True)
+            return torch.as_tensor(image)
+
         if isinstance(images, (list, tuple)):
-            images = torch.stack([torch.as_tensor(image) for image in images], dim=0)
+            images = torch.stack([_to_tensor(image) for image in images], dim=0)
         else:
-            images = torch.as_tensor(images)
+            images = _to_tensor(images)
 
         if images.ndim == 3:
             images = images.unsqueeze(0)
