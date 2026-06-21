@@ -10,7 +10,6 @@ set -euo pipefail
 
 # 1. Move to the directory where the job was submitted.
 cd "${PBS_O_WORKDIR:-$(pwd)}"
-cp ../lerobot/config.env ./config.env
 # 2. Source local job configuration.
 if [[ ! -f config.env ]]; then
   echo "Missing config.env in ${PWD}" >&2
@@ -27,10 +26,12 @@ mkdir -p "$HOME/.cache/lerobot"
 export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
 export HF_LEROBOT_HOME="${HF_LEROBOT_HOME:-$HOME/.cache/lerobot}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$HOME/.cache/huggingface/datasets}"
+export PYTHONPATH="${PYTHONPATH:-}:${PBS_O_WORKDIR}/src"
 
 export APPTAINERENV_HF_HOME="$HF_HOME"
 export APPTAINERENV_HF_LEROBOT_HOME="$HF_LEROBOT_HOME"
 export APPTAINERENV_HF_DATASETS_CACHE="$HF_DATASETS_CACHE"
+export APPTAINERENV_PYTHONPATH="$PYTHONPATH"
 
 if [[ -n "${HF_TOKEN:-}" ]]; then
   export APPTAINERENV_HF_TOKEN="$HF_TOKEN"

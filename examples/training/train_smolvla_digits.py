@@ -20,10 +20,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import torch
 from datasets import load_dataset
+
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 from lerobot.configs import FeatureType
 from lerobot.datasets import LeRobotDatasetMetadata, StreamingLeRobotDataset
