@@ -26,7 +26,7 @@ mkdir -p "$HOME/.cache/lerobot"
 export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
 export HF_LEROBOT_HOME="${HF_LEROBOT_HOME:-$HOME/.cache/lerobot}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$HOME/.cache/huggingface/datasets}"
-export PYTHONPATH="${PYTHONPATH:-}:${PBS_O_WORKDIR}/src"
+export PYTHONPATH="${PYTHONPATH:-}:$(pwd)/src"
 
 export APPTAINERENV_HF_HOME="$HF_HOME"
 export APPTAINERENV_HF_LEROBOT_HOME="$HF_LEROBOT_HOME"

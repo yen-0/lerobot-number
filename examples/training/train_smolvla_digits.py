@@ -43,6 +43,7 @@ from lerobot.policies.smolvla.digit_utils import (
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 from lerobot.policies.smolvla.processor_smolvla import make_smolvla_pre_post_processors
 from lerobot.utils.constants import ACTION
+from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.utils.feature_utils import dataset_to_policy_features
 
 
@@ -90,7 +91,10 @@ def _resolve_workdir() -> Path:
     workdir = os.environ.get("PBS_O_WORKDIR")
     if workdir:
         return Path(workdir).expanduser().resolve()
-    return Path.cwd().resolve()
+    cwd = Path.cwd().resolve()
+    if os.access(cwd, os.W_OK):
+        return cwd
+    return HF_LEROBOT_HOME
 
 
 def _resolve_output_path(path: str) -> Path:
