@@ -1,0 +1,73 @@
+#!/bin/bash
+#PBS -N smolvla_digits
+#PBS -q debug-g
+#PBS -W group_list=gw13
+#PBS -l select=1
+#PBS -l walltime=00:15:00
+#PBS -j oe
+
+set -euo pipefail
+
+# 1. Move to the directory where the job was submitted.
+cd "${PBS_O_WORKDIR:-$(pwd)}"
+cp ../lerobot/config.env ./config.env
+# 2. Source local job configuration.
+if [[ ! -f config.env ]]; then
+  echo "Missing config.env in ${PWD}" >&2
+  exit 1
+fi
+source config.env
+
+# 3. Prepare cache directories on the shared filesystem.
+mkdir -p "$HOME/.cache/huggingface"
+mkdir -p "$HOME/.cache/huggingface/datasets"
+mkdir -p "$HOME/.cache/lerobot"
+
+# 4. Export runtime variables for the host shell and Apptainer.
+export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
+export HF_LEROBOT_HOME="${HF_LEROBOT_HOME:-$HOME/.cache/lerobot}"
+export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$HOME/.cache/huggingface/datasets}"
+
+export APPTAINERENV_HF_HOME="$HF_HOME"
+export APPTAINERENV_HF_LEROBOT_HOME="$HF_LEROBOT_HOME"
+export APPTAINERENV_HF_DATASETS_CACHE="$HF_DATASETS_CACHE"
+
+if [[ -n "${HF_TOKEN:-}" ]]; then
+  export APPTAINERENV_HF_TOKEN="$HF_TOKEN"
+fi
+
+# 5. Load the Apptainer module and run training inside the GPU container.
+module load "${APPTAINER_MODULE}"
+
+ARGS=(
+  --dataset.repo_id="${DATASET_REPO_ID:-k1000dai/so101-writei}"
+  --output_dir="${OUTPUT_DIR:-./outputs/smolvla_digits}"
+  --job_name="${JOB_NAME:-smolvla_digits}"
+  --policy.device="${DEVICE:-cuda}"
+  --steps="${STEPS:-30000}"
+  --batch_size="${BATCH_SIZE:-8}"
+  --num_workers="${NUM_WORKERS:-4}"
+  --mnist_examples_per_digit="${MNIST_EXAMPLES_PER_DIGIT:-64}"
+)
+
+if [[ -n "${MNIST_CACHE_DIR:-}" ]]; then
+  ARGS+=(--mnist_cache_dir="${MNIST_CACHE_DIR}")
+fi
+
+if [[ -n "${DIGIT_MAP:-}" ]]; then
+  ARGS+=(--digit_map="${DIGIT_MAP}")
+fi
+
+if [[ "${PUSH_TO_HUB:-false}" == "true" ]]; then
+  if [[ -z "${POLICY_REPO_ID:-}" ]]; then
+    echo "POLICY_REPO_ID is required when PUSH_TO_HUB=true" >&2
+    exit 1
+  fi
+  ARGS+=(--push_to_hub --policy.repo_id="${POLICY_REPO_ID}")
+fi
+
+apptainer exec --nv \
+  --bind "${PBS_O_WORKDIR}:${PBS_O_WORKDIR}" \
+  --pwd "${PBS_O_WORKDIR}" \
+  "${APPTAINER_IMAGE}" \
+  python examples/training/train_smolvla_digits.py "${ARGS[@]}"
