@@ -47,6 +47,11 @@ from lerobot.utils.import_utils import get_safe_default_video_backend
 logger = logging.getLogger(__name__)
 
 
+def _video_decode_timestamps_enabled() -> bool:
+    value = os.environ.get("LEROBOT_LOG_VIDEO_TIMESTAMPS", "")
+    return value.lower() in ("1", "true", "yes", "on", "debug")
+
+
 def decode_video_frames(
     video_path: Path | str,
     timestamps: list[float],
@@ -117,6 +122,7 @@ def decode_video_frames_pyav(
     """
     # TODO(rcadene): also load audio stream at the same time
     video_path = str(video_path)
+    log_loaded_timestamps = log_loaded_timestamps or _video_decode_timestamps_enabled()
 
     # set the first and last requested timestamps
     # Note: previous timestamps are usually loaded, since we need to access the previous key frame
@@ -144,7 +150,13 @@ def decode_video_frames_pyav(
                     continue
                 current_ts = float(frame.pts * stream.time_base)
                 if log_loaded_timestamps:
-                    logger.info(f"frame loaded at timestamp={current_ts:.4f}")
+                    logger.info(
+                        "video decode frame: path=%s ts=%.4f target_range=[%.4f, %.4f]",
+                        video_path,
+                        current_ts,
+                        first_ts,
+                        last_ts,
+                    )
                 # Convert to CHW uint8 to match torchcodec's output layout.
                 arr = np.array(frame.to_ndarray(format="rgb24"), copy=True)  # H, W, 3
                 loaded_frames.append(torch.from_numpy(arr).permute(2, 0, 1).contiguous())

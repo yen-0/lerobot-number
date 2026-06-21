@@ -361,6 +361,12 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
 
         # keep the same seed across exhaustions if shuffle is False, otherwise shuffle data across exhaustions
         rng = np.random.default_rng(self.seed) if not self.shuffle else self.rng
+        logger.info(
+            "StreamingLeRobotDataset iterator started: num_shards=%s buffer_size=%s video_backend=%s",
+            self.num_shards,
+            self.buffer_size,
+            self._video_backend,
+        )
 
         buffer_indices_generator = self._iter_random_indices(rng, self.buffer_size)
 
@@ -374,12 +380,21 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         # (1) sample one shard at random from the ones available, and
         # (2) sample one frame from the shard sampled at (1)
         frames_buffer = []
+        frame_counter = 0
         while available_shards := list(idx_to_backtrack_dataset.keys()):
             shard_key = next(self._infinite_generator_over_elements(rng, available_shards))
             backtrack_dataset = idx_to_backtrack_dataset[shard_key]  # selects which shard to iterate on
+            if frame_counter < 5 or frame_counter % 50 == 0:
+                logger.info(
+                    "StreamingLeRobotDataset sampling shard=%s remaining_shards=%s buffered=%s",
+                    shard_key,
+                    len(available_shards),
+                    len(frames_buffer),
+                )
 
             try:
                 for frame in self.make_frame(backtrack_dataset):
+                    frame_counter += 1
                     if len(frames_buffer) == self.buffer_size:
                         i = next(buffer_indices_generator)  # samples a element from the buffer
                         yield frames_buffer[i]
@@ -468,8 +483,14 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
 
     def make_frame(self, dataset_iterator: Backtrackable) -> Generator:
         """Makes a frame starting from a dataset iterator"""
+        logger.info("StreamingLeRobotDataset.make_frame: requesting next item")
         item = next(dataset_iterator)
         item = item_to_torch(item)
+        logger.info(
+            "StreamingLeRobotDataset.make_frame: item loaded episode_index=%s index=%s",
+            item.get("episode_index"),
+            item.get("index"),
+        )
 
         updates = []  # list of "updates" to apply to the item retrieved from hf_dataset (w/o camera features)
 
@@ -500,6 +521,11 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
             # Some timestamps might not result available considering the episode's boundaries
             query_timestamps = self._get_query_timestamps(
                 current_ts, self.delta_indices, episode_boundaries_ts
+            )
+            logger.info(
+                "StreamingLeRobotDataset.make_frame: decoding videos episode_index=%s cameras=%s",
+                ep_idx,
+                list(query_timestamps.keys()),
             )
             video_frames = self._query_videos(query_timestamps, ep_idx)
 
@@ -557,6 +583,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         for video_key, query_ts in query_timestamps.items():
             root = self.meta.url_root if self.streaming and not self.streaming_from_local else self.root
             video_path = f"{root}/{self.meta.get_video_file_path(ep_idx, video_key)}"
+            logger.info("StreamingLeRobotDataset._query_videos: decoding %s from %s", video_key, video_path)
             frames = decode_video_frames(
                 video_path,
                 query_ts,

@@ -209,9 +209,26 @@ def main() -> None:
     logging.info("Optimizer initialized: %s", optimizer.__class__.__name__)
     step = 0
     last_log_time = time.time()
+    dataloader_iter = iter(dataloader)
     while step < args.steps:
-        for raw_batch in dataloader:
+        try:
+            logging.info("Waiting for batch %s/%s from dataloader...", step + 1, args.steps)
+            fetch_start = time.time()
+            raw_batch = next(dataloader_iter)
+            logging.info("Batch %s fetched in %.2fs", step + 1, time.time() - fetch_start)
+        except StopIteration:
+            logging.info("Dataloader exhausted, restarting iterator")
+            dataloader_iter = iter(dataloader)
+            continue
+        except Exception:
+            logging.exception("Dataloader fetch failed at step %s", step)
+            raise
+
+        try:
+            preprocess_start = time.time()
             processed_batch = preprocessor(_to_device(raw_batch, device))
+            logging.info("Batch %s preprocessed in %.2fs", step + 1, time.time() - preprocess_start)
+
             digit_labels = processed_batch.get(config.digit_label_key)
             if digit_labels is None:
                 raise KeyError(
@@ -221,13 +238,23 @@ def main() -> None:
             if not isinstance(digit_labels, torch.Tensor):
                 digit_labels = torch.as_tensor(digit_labels, dtype=torch.long, device=device)
             digit_labels = digit_labels.to(device=device, dtype=torch.long).view(-1)
+            logging.info("Batch %s digit labels resolved: shape=%s", step + 1, tuple(digit_labels.shape))
+
+            refs_start = time.time()
             digit_references = sample_digit_references(digit_bank, digit_labels.cpu()).to(device)
+            logging.info("Batch %s sampled digit references in %.2fs", step + 1, time.time() - refs_start)
             processed_batch[config.digit_reference_image_key] = digit_references
 
+            forward_start = time.time()
             loss, loss_dict = policy.forward(processed_batch)
+            logging.info("Batch %s forward pass in %.2fs", step + 1, time.time() - forward_start)
+            backward_start = time.time()
             loss.backward()
+            logging.info("Batch %s backward pass in %.2fs", step + 1, time.time() - backward_start)
+            optim_start = time.time()
             optimizer.step()
             optimizer.zero_grad()
+            logging.info("Batch %s optimizer step in %.2fs", step + 1, time.time() - optim_start)
 
             if step % args.log_freq == 0:
                 now = time.time()
@@ -251,6 +278,9 @@ def main() -> None:
             step += 1
             if step >= args.steps:
                 break
+        except Exception:
+            logging.exception("Training step failed at global step %s", step)
+            raise
 
     logging.info("Saving final artifacts to %s", output_dir)
     policy.save_pretrained(output_dir)
