@@ -130,22 +130,27 @@ def decode_video_frames_pyav(
     # av.time_base units (microseconds). `backward=True` lands us on the nearest keyframe at or
     # before `first_ts`, so we can then decode forward until we cover `last_ts`. See:
     # https://pyav.basswood-io.com/docs/stable/api/container.html#av.container.InputContainer.seek
-    with av.open(video_path) as container:
-        stream = container.streams.video[0]
-        container.seek(int(first_ts * av.time_base), backward=True)
+    #
+    # PyAV cannot open `hf://...` URLs directly, so we always go through `fsspec` and hand PyAV
+    # a readable file object instead of a raw path string.
+    with contextlib.ExitStack() as stack:
+        video_file = stack.enter_context(fsspec.open(video_path, mode="rb"))
+        with av.open(video_file) as container:
+            stream = container.streams.video[0]
+            container.seek(int(first_ts * av.time_base), backward=True)
 
-        for frame in container.decode(stream):
-            if frame.pts is None:
-                continue
-            current_ts = float(frame.pts * stream.time_base)
-            if log_loaded_timestamps:
-                logger.info(f"frame loaded at timestamp={current_ts:.4f}")
-            # Convert to CHW uint8 to match torchcodec's output layout.
-            arr = frame.to_ndarray(format="rgb24")  # H, W, 3
-            loaded_frames.append(torch.from_numpy(arr).permute(2, 0, 1).contiguous())
-            loaded_ts.append(current_ts)
-            if current_ts >= last_ts:
-                break
+            for frame in container.decode(stream):
+                if frame.pts is None:
+                    continue
+                current_ts = float(frame.pts * stream.time_base)
+                if log_loaded_timestamps:
+                    logger.info(f"frame loaded at timestamp={current_ts:.4f}")
+                # Convert to CHW uint8 to match torchcodec's output layout.
+                arr = np.array(frame.to_ndarray(format="rgb24"), copy=True)  # H, W, 3
+                loaded_frames.append(torch.from_numpy(arr).permute(2, 0, 1).contiguous())
+                loaded_ts.append(current_ts)
+                if current_ts >= last_ts:
+                    break
 
     if not loaded_frames:
         raise FrameTimestampError(
