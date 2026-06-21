@@ -23,6 +23,7 @@ import torch
 from datasets import load_dataset
 
 from lerobot.utils.constants import HF_LEROBOT_HOME, LOOKAHEAD_BACKTRACKTABLE, LOOKBACK_BACKTRACKTABLE
+from lerobot.utils.import_utils import get_safe_default_video_backend
 
 from .dataset_metadata import CODEBASE_VERSION, LeRobotDatasetMetadata
 from .feature_utils import get_delta_indices
