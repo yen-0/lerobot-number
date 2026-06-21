@@ -33,7 +33,6 @@ if str(SRC) not in sys.path:
 
 from lerobot.configs import FeatureType
 from lerobot.datasets import LeRobotDatasetMetadata, StreamingLeRobotDataset
-from lerobot.policies import make_pre_post_processors
 from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
 from lerobot.policies.smolvla.digit_utils import (
     build_mnist_reference_bank,
@@ -41,6 +40,7 @@ from lerobot.policies.smolvla.digit_utils import (
     sample_digit_references,
 )
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
+from lerobot.policies.smolvla.processor_smolvla import make_smolvla_pre_post_processors
 from lerobot.utils.constants import ACTION
 from lerobot.utils.feature_utils import dataset_to_policy_features
 
@@ -111,7 +111,7 @@ def main() -> None:
     policy.train()
     policy.to(device)
 
-    preprocessor, postprocessor = make_pre_post_processors(
+    preprocessor, postprocessor = make_smolvla_pre_post_processors(
         config,
         dataset_stats=dataset_metadata.stats,
         digit_map=digit_map,
