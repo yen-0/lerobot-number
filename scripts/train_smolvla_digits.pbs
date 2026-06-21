@@ -10,6 +10,7 @@ set -euo pipefail
 
 # 1. Move to the directory where the job was submitted.
 cd "${PBS_O_WORKDIR:-$(pwd)}"
+
 # 2. Source local job configuration.
 if [[ ! -f config.env ]]; then
   echo "Missing config.env in ${PWD}" >&2
@@ -21,28 +22,35 @@ source config.env
 mkdir -p "$HOME/.cache/huggingface"
 mkdir -p "$HOME/.cache/huggingface/datasets"
 mkdir -p "$HOME/.cache/lerobot"
+mkdir -p "$HOME/.cache/torch"
+mkdir -p "$HOME/.cache/triton"
 
 # 4. Export runtime variables for the host shell and Apptainer.
-export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
-export HF_LEROBOT_HOME="${HF_LEROBOT_HOME:-$HOME/.cache/lerobot}"
-export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$HOME/.cache/huggingface/datasets}"
-export PYTHONPATH="${PYTHONPATH:-}:$(pwd)/src"
+export HF_HOME=$HOME/.cache/huggingface
+export HF_LEROBOT_HOME=$HOME/.cache/lerobot
+export HF_DATASETS_CACHE=$HOME/.cache/huggingface/datasets
+export TORCH_HOME=$HOME/.cache/torch
+export TRITON_CACHE_DIR=$HOME/.cache/triton
+export PYTHONPATH=${PYTHONPATH:-}:$(pwd)/src
 
-export APPTAINERENV_HF_HOME="$HF_HOME"
-export APPTAINERENV_HF_LEROBOT_HOME="$HF_LEROBOT_HOME"
-export APPTAINERENV_HF_DATASETS_CACHE="$HF_DATASETS_CACHE"
-export APPTAINERENV_PYTHONPATH="$PYTHONPATH"
+# Pass environment variables directly into the Apptainer container runtime
+export APPTAINERENV_HF_HOME=$HF_HOME
+export APPTAINERENV_HF_LEROBOT_HOME=$HF_LEROBOT_HOME
+export APPTAINERENV_HF_DATASETS_CACHE=$HF_DATASETS_CACHE
+export APPTAINERENV_TORCH_HOME=$TORCH_HOME
+export APPTAINERENV_TRITON_CACHE_DIR=$TRITON_CACHE_DIR
+export APPTAINERENV_PYTHONPATH=$PYTHONPATH
 export APPTAINERENV_PBS_O_WORKDIR="$PBS_O_WORKDIR"
 
 if [[ -n "${HF_TOKEN:-}" ]]; then
   export APPTAINERENV_HF_TOKEN="$HF_TOKEN"
 fi
 
-# 5. Load the Apptainer module and run training inside the GPU container.
+# 5. Load the Apptainer module and build script arguments.
 module load "${APPTAINER_MODULE}"
 
 ARGS=(
-  --dataset.repo_id="${DATASET_REPO_ID:-k1000dai/so101-writei}"
+  --dataset.repo_id="${DATASET_REPO_ID:-k1000dai/so101-write}"
   --output_dir="${OUTPUT_DIR:-./outputs/smolvla_digits}"
   --job_name="${JOB_NAME:-smolvla_digits}"
   --policy.device="${DEVICE:-cuda}"
@@ -68,8 +76,11 @@ if [[ "${PUSH_TO_HUB:-false}" == "true" ]]; then
   ARGS+=(--push_to_hub --policy.repo_id="${POLICY_REPO_ID}")
 fi
 
+# 6. Run training inside the GPU container with explicit write permissions
 apptainer exec --nv \
-  --bind "${PBS_O_WORKDIR}:${PBS_O_WORKDIR}" \
+  --bind "${PBS_O_WORKDIR}:${PBS_O_WORKDIR}:rw" \
+  --bind "$HOME:$HOME:rw" \
+  --writable-tmpfs \
   --pwd "${PBS_O_WORKDIR}" \
   "${APPTAINER_IMAGE}" \
   python examples/training/train_smolvla_digits.py "${ARGS[@]}"

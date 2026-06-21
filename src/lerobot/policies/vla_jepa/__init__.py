@@ -13,11 +13,21 @@
 # limitations under the License.
 
 from .configuration_vla_jepa import VLAJEPAConfig
-from .modeling_vla_jepa import VLAJEPAPolicy
-from .processor_vla_jepa import make_vla_jepa_pre_post_processors
 
 __all__ = [
     "VLAJEPAConfig",
     "VLAJEPAPolicy",
     "make_vla_jepa_pre_post_processors",
 ]
+
+
+def __getattr__(name: str):
+    if name == "VLAJEPAPolicy":
+        from .modeling_vla_jepa import VLAJEPAPolicy
+
+        return VLAJEPAPolicy
+    if name == "make_vla_jepa_pre_post_processors":
+        from .processor_vla_jepa import make_vla_jepa_pre_post_processors
+
+        return make_vla_jepa_pre_post_processors
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -13,7 +13,17 @@
 # limitations under the License.
 
 from .configuration_gaussian_actor import GaussianActorConfig
-from .modeling_gaussian_actor import GaussianActorPolicy
-from .processor_gaussian_actor import make_gaussian_actor_pre_post_processors
 
 __all__ = ["GaussianActorConfig", "GaussianActorPolicy", "make_gaussian_actor_pre_post_processors"]
+
+
+def __getattr__(name: str):
+    if name == "GaussianActorPolicy":
+        from .modeling_gaussian_actor import GaussianActorPolicy
+
+        return GaussianActorPolicy
+    if name == "make_gaussian_actor_pre_post_processors":
+        from .processor_gaussian_actor import make_gaussian_actor_pre_post_processors
+
+        return make_gaussian_actor_pre_post_processors
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

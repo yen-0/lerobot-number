@@ -13,7 +13,17 @@
 # limitations under the License.
 
 from .configuration_smolvla import SmolVLAConfig
-from .modeling_smolvla import SmolVLAPolicy
-from .processor_smolvla import make_smolvla_pre_post_processors
 
 __all__ = ["SmolVLAConfig", "SmolVLAPolicy", "make_smolvla_pre_post_processors"]
+
+
+def __getattr__(name: str):
+    if name == "SmolVLAPolicy":
+        from .modeling_smolvla import SmolVLAPolicy
+
+        return SmolVLAPolicy
+    if name == "make_smolvla_pre_post_processors":
+        from .processor_smolvla import make_smolvla_pre_post_processors
+
+        return make_smolvla_pre_post_processors
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

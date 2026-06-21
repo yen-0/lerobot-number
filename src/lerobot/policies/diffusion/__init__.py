@@ -13,7 +13,17 @@
 # limitations under the License.
 
 from .configuration_diffusion import DiffusionConfig
-from .modeling_diffusion import DiffusionPolicy
-from .processor_diffusion import make_diffusion_pre_post_processors
 
 __all__ = ["DiffusionConfig", "DiffusionPolicy", "make_diffusion_pre_post_processors"]
+
+
+def __getattr__(name: str):
+    if name == "DiffusionPolicy":
+        from .modeling_diffusion import DiffusionPolicy
+
+        return DiffusionPolicy
+    if name == "make_diffusion_pre_post_processors":
+        from .processor_diffusion import make_diffusion_pre_post_processors
+
+        return make_diffusion_pre_post_processors
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

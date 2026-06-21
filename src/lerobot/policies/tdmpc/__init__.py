@@ -13,7 +13,17 @@
 # limitations under the License.
 
 from .configuration_tdmpc import TDMPCConfig
-from .modeling_tdmpc import TDMPCPolicy
-from .processor_tdmpc import make_tdmpc_pre_post_processors
 
 __all__ = ["TDMPCConfig", "TDMPCPolicy", "make_tdmpc_pre_post_processors"]
+
+
+def __getattr__(name: str):
+    if name == "TDMPCPolicy":
+        from .modeling_tdmpc import TDMPCPolicy
+
+        return TDMPCPolicy
+    if name == "make_tdmpc_pre_post_processors":
+        from .processor_tdmpc import make_tdmpc_pre_post_processors
+
+        return make_tdmpc_pre_post_processors
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

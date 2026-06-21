@@ -13,7 +13,17 @@
 # limitations under the License.
 
 from .configuration_act import ACTConfig
-from .modeling_act import ACTPolicy
-from .processor_act import make_act_pre_post_processors
 
 __all__ = ["ACTConfig", "ACTPolicy", "make_act_pre_post_processors"]
+
+
+def __getattr__(name: str):
+    if name == "ACTPolicy":
+        from .modeling_act import ACTPolicy
+
+        return ACTPolicy
+    if name == "make_act_pre_post_processors":
+        from .processor_act import make_act_pre_post_processors
+
+        return make_act_pre_post_processors
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

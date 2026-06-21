@@ -85,6 +85,7 @@ class SmolVLMWithExpertModel(nn.Module):
     ):
         super().__init__()
         require_package("transformers", extra="smolvla")
+        require_package("num2words", extra="smolvla")
         if load_vlm_weights:
             print(f"Loading  {model_id} weights ...")
             self.vlm = AutoModelForImageTextToText.from_pretrained(

@@ -15,7 +15,17 @@
 # limitations under the License.
 
 from .configuration_multi_task_dit import MultiTaskDiTConfig
-from .modeling_multi_task_dit import MultiTaskDiTPolicy
-from .processor_multi_task_dit import make_multi_task_dit_pre_post_processors
 
 __all__ = ["MultiTaskDiTConfig", "MultiTaskDiTPolicy", "make_multi_task_dit_pre_post_processors"]
+
+
+def __getattr__(name: str):
+    if name == "MultiTaskDiTPolicy":
+        from .modeling_multi_task_dit import MultiTaskDiTPolicy
+
+        return MultiTaskDiTPolicy
+    if name == "make_multi_task_dit_pre_post_processors":
+        from .processor_multi_task_dit import make_multi_task_dit_pre_post_processors
+
+        return make_multi_task_dit_pre_post_processors
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -13,7 +13,17 @@
 # limitations under the License.
 
 from .configuration_vqbet import VQBeTConfig
-from .modeling_vqbet import VQBeTPolicy
-from .processor_vqbet import make_vqbet_pre_post_processors
 
 __all__ = ["VQBeTConfig", "VQBeTPolicy", "make_vqbet_pre_post_processors"]
+
+
+def __getattr__(name: str):
+    if name == "VQBeTPolicy":
+        from .modeling_vqbet import VQBeTPolicy
+
+        return VQBeTPolicy
+    if name == "make_vqbet_pre_post_processors":
+        from .processor_vqbet import make_vqbet_pre_post_processors
+
+        return make_vqbet_pre_post_processors
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
