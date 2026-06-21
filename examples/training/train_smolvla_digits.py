@@ -148,7 +148,6 @@ def main() -> None:
     dataloader_kwargs = {
         "batch_size": args.batch_size,
         "num_workers": args.num_workers,
-        "shuffle": True,
         "pin_memory": device.type != "cpu",
         "drop_last": True,
     }
