@@ -247,6 +247,7 @@ class ProcessorConfigKwargs(TypedDict, total=False):
     postprocessor_overrides: dict[str, Any] | None
     dataset_stats: dict[str, dict[str, torch.Tensor]] | None
     dataset_meta: Any | None
+    digit_map: dict[str, int] | None
 
 
 def make_pre_post_processors(
@@ -398,6 +399,7 @@ def make_pre_post_processors(
         processors = make_smolvla_pre_post_processors(
             config=policy_cfg,
             dataset_stats=kwargs.get("dataset_stats"),
+            digit_map=kwargs.get("digit_map"),
         )
 
     elif isinstance(policy_cfg, GrootConfig):

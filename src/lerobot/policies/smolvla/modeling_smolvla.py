@@ -54,7 +54,7 @@ policy = SmolVLAPolicy.from_pretrained("lerobot/smolvla_base")
 
 import math
 from collections import deque
-from typing import TypedDict, Unpack
+from typing import Any, TypedDict, Unpack
 
 import torch
 import torch.nn.functional as F  # noqa: N812
@@ -69,6 +69,7 @@ from ..rtc.modeling_rtc import RTCProcessor
 from ..utils import (
     populate_queues,
 )
+from .digit_utils import resolve_digit_label
 from .configuration_smolvla import SmolVLAConfig
 from .smolvlm_with_expert import SmolVLMWithExpertModel
 
@@ -77,6 +78,44 @@ class ActionSelectKwargs(TypedDict, total=False):
     inference_delay: int | None
     prev_chunk_left_over: Tensor | None
     execution_horizon: int | None
+
+
+def masked_mean(tensor: Tensor, mask: Tensor) -> Tensor:
+    """Compute a masked mean over the sequence dimension."""
+
+    if tensor.ndim != 3:
+        raise ValueError(f"Expected tensor with shape (B, L, D), got {tuple(tensor.shape)}")
+    if mask.ndim != 2:
+        raise ValueError(f"Expected mask with shape (B, L), got {tuple(mask.shape)}")
+    weights = mask.to(dtype=tensor.dtype).unsqueeze(-1)
+    total = (tensor * weights).sum(dim=1)
+    denom = weights.sum(dim=1).clamp_min(1.0)
+    return total / denom
+
+
+class DigitReferenceEncoder(nn.Module):
+    """Small CNN used to encode MNIST reference digits for auxiliary supervision."""
+
+    def __init__(self, in_channels: int, hidden_dim: int, out_dim: int):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Conv2d(in_channels, hidden_dim, kernel_size=3, stride=2, padding=1),
+            nn.GELU(),
+            nn.Conv2d(hidden_dim, hidden_dim * 2, kernel_size=3, stride=2, padding=1),
+            nn.GELU(),
+            nn.Conv2d(hidden_dim * 2, hidden_dim * 2, kernel_size=3, stride=2, padding=1),
+            nn.GELU(),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.Linear(hidden_dim * 2, out_dim),
+        )
+
+    def forward(self, images: Tensor) -> Tensor:
+        if images.ndim != 4:
+            raise ValueError(f"Expected reference images with shape (B, C, H, W), got {tuple(images.shape)}")
+        if images.shape[1] == 1:
+            images = images.repeat(1, 3, 1, 1)
+        return self.encoder(images)
 
 
 def create_sinusoidal_pos_embedding(
@@ -246,6 +285,24 @@ class SmolVLAPolicy(PreTrainedPolicy):
         self.config = config
         self.init_rtc_processor()
         self.model = VLAFlowMatching(config, rtc_processor=self.rtc_processor)
+        context_dim = self.model.vlm_with_expert.expert_hidden_size
+        self.digit_context_head = nn.Sequential(
+            nn.LayerNorm(context_dim),
+            nn.Linear(context_dim, context_dim),
+            nn.GELU(),
+            nn.Linear(context_dim, config.digit_num_classes),
+        )
+        self.digit_reference_encoder = DigitReferenceEncoder(
+            in_channels=3,
+            hidden_dim=config.digit_reference_hidden_dim,
+            out_dim=context_dim,
+        )
+        self.digit_reference_projection = nn.Sequential(
+            nn.LayerNorm(context_dim),
+            nn.Linear(context_dim, context_dim),
+            nn.GELU(),
+            nn.Linear(context_dim, context_dim),
+        )
         self.reset()
 
     def reset(self):
@@ -355,6 +412,50 @@ class SmolVLAPolicy(PreTrainedPolicy):
     def _rtc_enabled(self) -> bool:
         return self.config.rtc_config is not None and self.config.rtc_config.enabled
 
+    def _prepare_digit_reference_images(self, images: Any, device: torch.device) -> Tensor:
+        """Normalize the auxiliary digit reference image batch."""
+
+        if isinstance(images, (list, tuple)):
+            images = torch.stack([torch.as_tensor(image) for image in images], dim=0)
+        else:
+            images = torch.as_tensor(images)
+
+        if images.ndim == 3:
+            images = images.unsqueeze(0)
+        if images.ndim != 4:
+            raise ValueError(
+                f"Expected digit reference images with shape (B, C, H, W) or (B, H, W, C), got {tuple(images.shape)}"
+            )
+        if images.shape[1] not in (1, 3) and images.shape[-1] in (1, 3):
+            images = images.permute(0, 3, 1, 2)
+        if images.shape[1] == 1:
+            images = images.repeat(1, 3, 1, 1)
+        if images.dtype != torch.float32:
+            images = images.to(dtype=torch.float32)
+        if images.numel() > 0 and images.max() > 1:
+            images = images / 255.0
+        return images.to(device=device)
+
+    def _resolve_digit_labels(self, batch: dict[str, Tensor], device: torch.device) -> Tensor | None:
+        """Resolve digit labels from an explicit label tensor or the batch task text."""
+
+        digit_labels = batch.get(self.config.digit_label_key)
+        if digit_labels is None:
+            digit_labels = batch.get("task")
+        if digit_labels is None:
+            return None
+
+        if isinstance(digit_labels, torch.Tensor):
+            return digit_labels.to(device=device, dtype=torch.long).view(-1)
+
+        if isinstance(digit_labels, str):
+            digit_labels = [digit_labels]
+        elif not isinstance(digit_labels, (list, tuple)):
+            digit_labels = [digit_labels]
+
+        resolved_labels = [resolve_digit_label(task) for task in digit_labels]
+        return torch.tensor(resolved_labels, dtype=torch.long, device=device)
+
     def forward(
         self, batch: dict[str, Tensor], noise=None, time=None, reduction: str = "mean"
     ) -> dict[str, Tensor]:
@@ -396,12 +497,12 @@ class SmolVLAPolicy(PreTrainedPolicy):
         if reduction == "none":
             # Return per-sample losses (B,) by averaging over valid (time, action) entries
             if actions_is_pad is None:
-                per_sample_loss = losses.mean(dim=(1, 2))
+                loss = losses.mean(dim=(1, 2))
             else:
                 num_valid = ((~actions_is_pad).sum(dim=1) * losses.shape[-1]).clamp_min(1)
-                per_sample_loss = losses.sum(dim=(1, 2)) / num_valid
-            loss_dict["loss"] = per_sample_loss.mean().item()
-            return per_sample_loss, loss_dict
+                loss = losses.sum(dim=(1, 2)) / num_valid
+            action_loss_scalar = loss.mean()
+            loss_dict["action_loss"] = action_loss_scalar.item()
         else:
             # Default: return scalar mean loss over valid (time, action) entries
             if actions_is_pad is None:
@@ -409,8 +510,51 @@ class SmolVLAPolicy(PreTrainedPolicy):
             else:
                 num_valid = ((~actions_is_pad).sum() * losses.shape[-1]).clamp_min(1)
                 loss = losses.sum() / num_valid
-            loss_dict["loss"] = loss.item()
-            return loss, loss_dict
+            loss_dict["action_loss"] = loss.item()
+            action_loss_scalar = loss
+
+        total_loss = loss
+        digit_labels = self._resolve_digit_labels(batch, action_loss_scalar.device)
+        if digit_labels is not None:
+            robot_context = self.encode_robot_context(batch)
+            if digit_labels.shape[0] != robot_context.shape[0]:
+                raise ValueError(
+                    f"Digit label batch size {digit_labels.shape[0]} does not match action batch size "
+                    f"{robot_context.shape[0]}."
+                )
+            digit_logits = self.digit_context_head(robot_context)
+            digit_classification_loss = F.cross_entropy(digit_logits, digit_labels)
+            loss_dict["digit_classification_loss"] = digit_classification_loss.item()
+            loss_dict["digit_prediction_accuracy"] = (
+                (digit_logits.argmax(dim=-1) == digit_labels).float().mean().item()
+            )
+            digit_total_loss = self.config.digit_classification_loss_weight * digit_classification_loss
+
+            digit_reference_images = batch.get(self.config.digit_reference_image_key)
+            if digit_reference_images is not None:
+                digit_reference_images = self._prepare_digit_reference_images(
+                    digit_reference_images, device=robot_context.device
+                )
+                reference_embeddings = self.digit_reference_encoder(digit_reference_images)
+                robot_digit_embeddings = self.digit_reference_projection(robot_context)
+                reference_digit_embeddings = self.digit_reference_projection(reference_embeddings)
+                robot_digit_embeddings = F.normalize(robot_digit_embeddings, dim=-1)
+                reference_digit_embeddings = F.normalize(reference_digit_embeddings, dim=-1)
+                logits = robot_digit_embeddings @ reference_digit_embeddings.T
+                logits = logits / self.config.digit_reference_temperature
+                targets = torch.arange(logits.shape[0], device=logits.device)
+                alignment_loss = 0.5 * (
+                    F.cross_entropy(logits, targets) + F.cross_entropy(logits.T, targets)
+                )
+                loss_dict["digit_alignment_loss"] = alignment_loss.item()
+                digit_total_loss = digit_total_loss + self.config.digit_alignment_loss_weight * alignment_loss
+
+            total_loss = total_loss + digit_total_loss
+
+        loss_dict["loss"] = (
+            total_loss.mean().item() if isinstance(total_loss, torch.Tensor) and total_loss.ndim > 0 else total_loss.item()
+        )
+        return total_loss, loss_dict
 
     def prepare_images(self, batch):
         """Apply SmolVLA preprocessing to the images, like resizing to 224x224 and padding to keep aspect ratio, and
@@ -491,6 +635,29 @@ class SmolVLAPolicy(PreTrainedPolicy):
         """Pad action"""
         actions = pad_vector(batch[ACTION], self.config.max_action_dim)
         return actions
+
+    def encode_robot_context(self, batch: dict[str, Tensor]) -> Tensor:
+        """Encode the current robot context into a pooled hidden representation."""
+
+        images, img_masks = self.prepare_images(batch)
+        state = self.prepare_state(batch)
+        lang_tokens = batch[OBS_LANGUAGE_TOKENS]
+        lang_masks = batch[OBS_LANGUAGE_ATTENTION_MASK]
+        prefix_embs, prefix_pad_masks, prefix_att_masks = self.model.embed_prefix(
+            images, img_masks, lang_tokens, lang_masks, state=state
+        )
+        prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
+        prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+        prefix_outs, _ = self.model.vlm_with_expert.forward(
+            attention_mask=prefix_att_2d_masks,
+            position_ids=prefix_position_ids,
+            past_key_values=None,
+            inputs_embeds=[prefix_embs, None],
+            use_cache=False,
+            fill_kv_cache=False,
+        )
+        prefix_hidden = prefix_outs[0]
+        return masked_mean(prefix_hidden, prefix_pad_masks)
 
     def _get_default_peft_targets(self) -> dict[str, any]:
         """Return default PEFT target modules for SmolVLA fine-tuning."""

@@ -70,6 +70,15 @@ class SmolVLAConfig(PreTrainedConfig):
     train_expert_only: bool = True
     train_state_proj: bool = True
 
+    # Digit supervision for SO-101 number drawing.
+    digit_label_key: str = "digit_label"
+    digit_reference_image_key: str = "digit_reference_images"
+    digit_num_classes: int = 10
+    digit_reference_hidden_dim: int = 128
+    digit_classification_loss_weight: float = 1.0
+    digit_alignment_loss_weight: float = 0.25
+    digit_reference_temperature: float = 0.07
+
     # Training presets
     optimizer_lr: float = 1e-4
     optimizer_betas: tuple[float, float] = (0.9, 0.95)
@@ -119,6 +128,14 @@ class SmolVLAConfig(PreTrainedConfig):
             raise NotImplementedError(
                 "`use_delta_joint_actions_aloha` is used by smolvla for aloha real models. It is not ported yet in LeRobot."
             )
+        if self.digit_num_classes <= 0:
+            raise ValueError("digit_num_classes must be positive.")
+        if self.digit_reference_hidden_dim <= 0:
+            raise ValueError("digit_reference_hidden_dim must be positive.")
+        if self.digit_classification_loss_weight < 0 or self.digit_alignment_loss_weight < 0:
+            raise ValueError("digit loss weights must be non-negative.")
+        if self.digit_reference_temperature <= 0:
+            raise ValueError("digit_reference_temperature must be positive.")
 
     def validate_features(self) -> None:
         for i in range(self.empty_cameras):

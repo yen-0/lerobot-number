@@ -14,17 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from dataclasses import dataclass
 from typing import Any
 
 import torch
 
 from lerobot.processor import (
     AddBatchDimensionProcessorStep,
+    ComplementaryDataProcessorStep,
     DeviceProcessorStep,
     NewLineTaskProcessorStep,
     NormalizerProcessorStep,
     PolicyAction,
     PolicyProcessorPipeline,
+    ProcessorStepRegistry,
     RenameObservationsProcessorStep,
     TokenizerProcessorStep,
     UnnormalizerProcessorStep,
@@ -34,11 +37,46 @@ from lerobot.processor import (
 from lerobot.utils.constants import POLICY_POSTPROCESSOR_DEFAULT_NAME, POLICY_PREPROCESSOR_DEFAULT_NAME
 
 from .configuration_smolvla import SmolVLAConfig
+from .digit_utils import resolve_digit_label
+
+
+@dataclass
+@ProcessorStepRegistry.register(name="smolvla_digit_label_processor")
+class SmolVLADigitLabelProcessorStep(ComplementaryDataProcessorStep):
+    """Derive a digit label from the episode task text and store it in complementary data."""
+
+    digit_label_key: str = "digit_label"
+    task_key: str = "task"
+    digit_map: dict[str, int] | None = None
+
+    def complementary_data(self, complementary_data: dict[str, Any]) -> dict[str, Any]:
+        task = complementary_data.get(self.task_key)
+        if task is None:
+            raise ValueError(f"Missing '{self.task_key}' in complementary data.")
+
+        if isinstance(task, (list, tuple)):
+            labels = [resolve_digit_label(item, self.digit_map) for item in task]
+        else:
+            labels = [resolve_digit_label(task, self.digit_map)]
+
+        complementary_data[self.digit_label_key] = torch.tensor(labels, dtype=torch.long)
+        return complementary_data
+
+    def get_config(self) -> dict[str, Any]:
+        return {
+            "digit_label_key": self.digit_label_key,
+            "task_key": self.task_key,
+            "digit_map": self.digit_map,
+        }
+
+    def transform_features(self, features):
+        return features
 
 
 def make_smolvla_pre_post_processors(
     config: SmolVLAConfig,
     dataset_stats: dict[str, dict[str, torch.Tensor]] | None = None,
+    digit_map: dict[str, int] | None = None,
 ) -> tuple[
     PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
     PolicyProcessorPipeline[PolicyAction, PolicyAction],
@@ -69,6 +107,7 @@ def make_smolvla_pre_post_processors(
     input_steps = [
         RenameObservationsProcessorStep(rename_map={}),  # To mimic the same processor as pretrained one
         AddBatchDimensionProcessorStep(),
+        SmolVLADigitLabelProcessorStep(digit_map=digit_map, digit_label_key=config.digit_label_key),
         NewLineTaskProcessorStep(),
         TokenizerProcessorStep(
             tokenizer_name=config.vlm_model_name,

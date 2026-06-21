@@ -1,0 +1,67 @@
+# SmolVLA for SO-101 Digit Drawing
+
+This workflow fine-tunes the existing `smolvla` policy for whiteboard digit drawing.
+The robot still learns from teleop demonstrations, but training adds two digit-specific signals:
+
+- a digit label derived by a processor from the dataset `task` field, or from an explicit mapping file when the text is not numeric
+- an MNIST reference image sampled for that digit during training
+
+The MNIST image is training-only. It is used to shape the shared latent space, not as an inference-time input.
+
+## What to prepare
+
+- An SO-101 LeRobot dataset with drawing demonstrations, such as `k1000dai/so101-write` or `k1000dai/so101-writei`
+- A task string stored in the dataset metadata that identifies the target digit per episode
+- Hugging Face access to download MNIST and the dataset
+
+If your task text already contains a digit, the helper script can parse it directly.
+If not, pass a JSON mapping with task text as the key and digit `0`-`9` as the value.
+The parser accepts compact task names like `write1` as well as spaced variants like `write 1`.
+
+Example mapping:
+
+```json
+{
+  "draw zero": 0,
+  "draw one": 1,
+  "draw two": 2
+}
+```
+
+## Training
+
+Run the shell wrapper:
+
+```bash
+./scripts/train_smolvla_digits.sh
+```
+
+Or call the Python entrypoint directly:
+
+```bash
+uv run python examples/training/train_smolvla_digits.py \
+  --dataset.repo_id=k1000dai/so101-writei \
+  --output_dir=outputs/train/smolvla_so101_digits \
+  --steps=30000 \
+  --batch_size=8 \
+  --policy.device=cuda
+```
+
+Useful overrides:
+
+- `--digit_map path/to/digit_map.json`
+- `--mnist_examples_per_digit 64`
+- `--mnist_cache_dir /tmp/mnist_bank.pt`
+
+The training loop logs:
+
+- `action_loss`
+- `digit_classification_loss`
+- `digit_alignment_loss`
+- `digit_prediction_accuracy`
+
+## Notes
+
+- `smolvla` remains the policy type. The digit branch is an auxiliary objective added to the existing backbone.
+- The policy still consumes the standard robot observations and the task text. A processor step turns that task string into `digit_label` before the model sees the batch.
+- The MNIST reference image is only attached during training.
