@@ -15,6 +15,7 @@
 # limitations under the License.
 from collections import deque
 from collections.abc import Callable, Generator, Iterable, Iterator
+import logging
 from pathlib import Path
 
 import datasets
@@ -38,6 +39,8 @@ from .video_utils import (
     VideoDecoderCache,
     decode_video_frames,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class LookBackError(Exception):

@@ -150,7 +150,7 @@ def decode_video_frames_pyav(
                     continue
                 current_ts = float(frame.pts * stream.time_base)
                 if log_loaded_timestamps:
-                    logger.info(
+                    logging.getLogger(__name__).info(
                         "video decode frame: path=%s ts=%.4f target_range=[%.4f, %.4f]",
                         video_path,
                         current_ts,
