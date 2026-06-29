@@ -325,7 +325,7 @@ class SmolVLMWithExpertModel(nn.Module):
             f"Both len(inputs_embeds) == {len(inputs_embeds)} and past_key_values is {past_key_values}"
         )
 
-        if len(inputs_embeds) == 2 and not past_key_values:
+        if len(inputs_embeds) == 2 and inputs_embeds[0] is not None and not past_key_values:
             # Prefix attention
             seq_len = inputs_embeds[0].shape[1]
             position_id, expert_position_id = position_ids[:, :seq_len], position_ids[:, seq_len:]
@@ -373,7 +373,7 @@ class SmolVLMWithExpertModel(nn.Module):
 
         # Expert
         expert_layer = model_layers[1][layer_idx]
-        if expert_layer is not None:
+        if expert_layer is not None and inputs_embeds[1] is not None:
             expert_hidden_states = expert_layer.input_layernorm(inputs_embeds[1])
 
             expert_input_shape = expert_hidden_states.shape[:-1]
