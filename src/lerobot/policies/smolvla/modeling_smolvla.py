@@ -286,7 +286,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
         self.config = config
         self.init_rtc_processor()
         self.model = VLAFlowMatching(config, rtc_processor=self.rtc_processor)
-        context_dim = self.model.vlm_with_expert.expert_hidden_size
+        context_dim = self.model.vlm_with_expert.config.text_config.hidden_size
         self.digit_context_head = nn.Sequential(
             nn.LayerNorm(context_dim),
             nn.Linear(context_dim, context_dim),
