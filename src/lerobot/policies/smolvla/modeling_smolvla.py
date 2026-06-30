@@ -527,7 +527,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
         total_loss = loss
         digit_labels = self._resolve_digit_labels(batch, action_loss_scalar.device)
         if digit_labels is not None:
-            robot_context = self.encode_robot_context(batch)
+            robot_context = self.encode_robot_context(batch).to(dtype=torch.float32)
             if digit_labels.shape[0] != robot_context.shape[0]:
                 raise ValueError(
                     f"Digit label batch size {digit_labels.shape[0]} does not match action batch size "
