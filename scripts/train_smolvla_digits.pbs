@@ -61,6 +61,8 @@ ARGS=(
   --batch_size="${BATCH_SIZE:-32}"
   --num_workers="${NUM_WORKERS:-4}"
   --mnist_examples_per_digit="${MNIST_EXAMPLES_PER_DIGIT:-64}"
+  --save_freq="${SAVE_FREQ:-1000}"
+  --resume
 )
 
 if [[ -n "${MNIST_CACHE_DIR:-}" ]]; then

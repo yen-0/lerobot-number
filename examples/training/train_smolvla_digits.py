@@ -60,7 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=30_000)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--num_workers", type=int, default=4)
-    parser.add_argument("--save_freq", type=int, default=5_000)
+    parser.add_argument("--save_freq", type=int, default=1_000)
     parser.add_argument("--log_freq", type=int, default=20)
     parser.add_argument("--mnist_examples_per_digit", type=int, default=64)
     parser.add_argument("--mnist_cache_dir", default=None)
@@ -68,6 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--policy.repo_id", dest="policy_repo_id", default=None)
     parser.add_argument("--push_to_hub", action="store_true")
     parser.add_argument("--streaming", action="store_true", help="Stream the dataset from Hub instead of caching it locally")
+    parser.add_argument("--resume", action="store_true", help="Auto-resume from the latest checkpoint in output_dir if it exists")
     return parser.parse_args()
 
 
@@ -129,6 +130,19 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     logging.info("Output directory: %s", output_dir)
 
+    checkpoint_dir = None
+    start_step = 0
+    if args.resume:
+        checkpoints = list(output_dir.glob("checkpoint-*"))
+        if checkpoints:
+            checkpoints = sorted(
+                checkpoints,
+                key=lambda x: int(x.name.split("-")[-1])
+            )
+            checkpoint_dir = checkpoints[-1]
+            start_step = int(checkpoint_dir.name.split("-")[-1])
+            logging.info("Found latest checkpoint to resume: %s (starting from step %d)", checkpoint_dir, start_step)
+
     device = torch.device(args.device)
     logging.info("Device: %s", device)
     dataset_metadata = LeRobotDatasetMetadata(args.dataset_repo_id)
@@ -155,7 +169,11 @@ def main() -> None:
         digit_classification_loss_weight=1.0,
     )
 
-    policy = SmolVLAPolicy(config)
+    if checkpoint_dir is not None:
+        logging.info("Resuming policy from checkpoint: %s", checkpoint_dir)
+        policy = SmolVLAPolicy.from_pretrained(checkpoint_dir)
+    else:
+        policy = SmolVLAPolicy(config)
     policy.train()
     policy.to(device)
     logging.info("Policy initialized on %s", device)
@@ -225,7 +243,10 @@ def main() -> None:
 
     optimizer = config.get_optimizer_preset().build(policy.parameters())
     logging.info("Optimizer initialized: %s", optimizer.__class__.__name__)
-    step = 0
+    if checkpoint_dir is not None and (checkpoint_dir / "optimizer.bin").exists():
+        logging.info("Loading optimizer state from checkpoint: %s", checkpoint_dir / "optimizer.bin")
+        optimizer.load_state_dict(torch.load(checkpoint_dir / "optimizer.bin", map_location=device))
+    step = start_step
     last_log_time = time.time()
     dataloader_iter = iter(dataloader)
     while step < args.steps:
@@ -286,12 +307,13 @@ def main() -> None:
                 print(json.dumps({"step": step, **loss_dict}, sort_keys=True), flush=True)
                 last_log_time = now
 
-            if step > 0 and step % args.save_freq == 0:
+            if step > start_step and step % args.save_freq == 0:
                 checkpoint_dir = output_dir / f"checkpoint-{step}"
                 logging.info("Saving checkpoint to %s", checkpoint_dir)
                 policy.save_pretrained(checkpoint_dir)
                 preprocessor.save_pretrained(checkpoint_dir)
                 postprocessor.save_pretrained(checkpoint_dir)
+                torch.save(optimizer.state_dict(), checkpoint_dir / "optimizer.bin")
 
             step += 1
             if step >= args.steps:
