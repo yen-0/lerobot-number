@@ -1,9 +1,9 @@
 #!/bin/bash
 #PBS -N smolvla_digits
-#PBS -q gpu
+#PBS -q regular-g
 #PBS -W group_list=gw13
 #PBS -l select=1
-#PBS -l walltime=72:00:00
+#PBS -l walltime=48:00:00
 #PBS -j oe
 
 set -euo pipefail

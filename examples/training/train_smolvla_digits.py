@@ -36,7 +36,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from lerobot.configs import FeatureType
-from lerobot.datasets import LeRobotDatasetMetadata, StreamingLeRobotDataset
+from lerobot.datasets import LeRobotDataset, LeRobotDatasetMetadata, StreamingLeRobotDataset
 from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
 from lerobot.policies.smolvla.digit_utils import (
     build_mnist_reference_bank,
@@ -67,6 +67,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--digit_map", default=None)
     parser.add_argument("--policy.repo_id", dest="policy_repo_id", default=None)
     parser.add_argument("--push_to_hub", action="store_true")
+    parser.add_argument("--streaming", action="store_true", help="Stream the dataset from Hub instead of caching it locally")
     return parser.parse_args()
 
 
@@ -173,18 +174,32 @@ def main() -> None:
         for key in config.image_features
     }
 
-    dataset = StreamingLeRobotDataset(
-        args.dataset_repo_id,
-        delta_timestamps=delta_timestamps,
-        tolerance_s=1e-3,
-    )
-    logging.info(
-        "Streaming dataset ready: shards=%s backend=%s tolerance_s=%s",
-        dataset.num_shards,
-        dataset._video_backend,
-        dataset.tolerance_s,
-    )
-    effective_num_workers = min(args.num_workers, max(1, dataset.num_shards))
+    if args.streaming:
+        dataset = StreamingLeRobotDataset(
+            args.dataset_repo_id,
+            delta_timestamps=delta_timestamps,
+            tolerance_s=1e-3,
+        )
+        logging.info(
+            "Streaming dataset ready: shards=%s backend=%s tolerance_s=%s",
+            dataset.num_shards,
+            dataset._video_backend,
+            dataset.tolerance_s,
+        )
+        effective_num_workers = min(args.num_workers, max(1, dataset.num_shards))
+    else:
+        dataset = LeRobotDataset(
+            args.dataset_repo_id,
+            delta_timestamps=delta_timestamps,
+            tolerance_s=1e-3,
+        )
+        logging.info(
+            "Dataset ready: backend=%s tolerance_s=%s",
+            dataset._video_backend,
+            dataset.tolerance_s,
+        )
+        effective_num_workers = args.num_workers
+
     logging.info("DataLoader workers: requested=%s effective=%s", args.num_workers, effective_num_workers)
     dataloader_kwargs = {
         "batch_size": args.batch_size,
@@ -192,6 +207,9 @@ def main() -> None:
         "pin_memory": device.type != "cpu",
         "drop_last": True,
     }
+    if not args.streaming:
+        dataloader_kwargs["shuffle"] = True
+
     if effective_num_workers > 0:
         dataloader_kwargs["prefetch_factor"] = 2
     dataloader = torch.utils.data.DataLoader(dataset, **dataloader_kwargs)
