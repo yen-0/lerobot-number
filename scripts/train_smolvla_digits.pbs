@@ -97,9 +97,21 @@ echo "[$(date -Is)] apptainer image: ${APPTAINER_IMAGE}"
 echo "[$(date -Is)] args: ${ARGS[*]}"
 
 # 6. Run training inside the GPU container with explicit write permissions
+BINDS=(
+  --bind "${PBS_O_WORKDIR}:${PBS_O_WORKDIR}:rw"
+  --bind "$HOME:$HOME:rw"
+)
+
+if [[ -d "/work/gw13" ]]; then
+  BINDS+=(--bind "/work/gw13:/work/gw13:rw")
+fi
+
+if [[ "${CACHE_BASE}" != "$HOME/.cache" ]]; then
+  BINDS+=(--bind "${CACHE_BASE}:${CACHE_BASE}:rw")
+fi
+
 apptainer --debug exec --nv \
-  --bind "${PBS_O_WORKDIR}:${PBS_O_WORKDIR}:rw" \
-  --bind "$HOME:$HOME:rw" \
+  "${BINDS[@]}" \
   --writable-tmpfs \
   --pwd "${PBS_O_WORKDIR}" \
   "${APPTAINER_IMAGE}" \
