@@ -19,18 +19,24 @@ fi
 source config.env
 
 # 3. Prepare cache directories on the shared filesystem.
-mkdir -p "$HOME/.cache/huggingface"
-mkdir -p "$HOME/.cache/huggingface/datasets"
-mkdir -p "$HOME/.cache/lerobot"
-mkdir -p "$HOME/.cache/torch"
-mkdir -p "$HOME/.cache/triton"
+if [[ -d "/work/gw13/w13009" ]]; then
+  CACHE_BASE="/work/gw13/w13009/.cache"
+else
+  CACHE_BASE="$HOME/.cache"
+fi
+
+mkdir -p "$CACHE_BASE/huggingface"
+mkdir -p "$CACHE_BASE/huggingface/datasets"
+mkdir -p "$CACHE_BASE/lerobot"
+mkdir -p "$CACHE_BASE/torch"
+mkdir -p "$CACHE_BASE/triton"
 
 # 4. Export runtime variables for the host shell and Apptainer.
-export HF_HOME=$HOME/.cache/huggingface
-export HF_LEROBOT_HOME=$HOME/.cache/lerobot
-export HF_DATASETS_CACHE=$HOME/.cache/huggingface/datasets
-export TORCH_HOME=$HOME/.cache/torch
-export TRITON_CACHE_DIR=$HOME/.cache/triton
+export HF_HOME=$CACHE_BASE/huggingface
+export HF_LEROBOT_HOME=$CACHE_BASE/lerobot
+export HF_DATASETS_CACHE=$CACHE_BASE/huggingface/datasets
+export TORCH_HOME=$CACHE_BASE/torch
+export TRITON_CACHE_DIR=$CACHE_BASE/triton
 export PYTHONPATH=${PYTHONPATH:-}:$(pwd)/src
 export PYTHONUNBUFFERED=1
 
