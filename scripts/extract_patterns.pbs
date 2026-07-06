@@ -18,6 +18,12 @@ if [[ ! -f config.env ]]; then
 fi
 source config.env
 
+if [[ -z "${HF_TOKEN:-}" || "${HF_TOKEN}" == "hf_YOUR_TOKEN_HERE" ]]; then
+  echo "[WARNING] HF_TOKEN is not set or is still the placeholder in config.env!" >&2
+else
+  echo "[INFO] HF_TOKEN loaded successfully (starts with: ${HF_TOKEN:0:8}...)"
+fi
+
 # 3. Prepare cache directories on the shared filesystem.
 if [[ -d "/work/gw13/w13009" ]]; then
   CACHE_BASE="/work/gw13/w13009/.cache"
@@ -51,9 +57,9 @@ fi
 # 5. Load the Apptainer module and build script arguments.
 module load "${APPTAINER_MODULE}"
 
-MODE="${EXTRACT_MODE:-${1:-calibrate}}"
-CROP="${EXTRACT_CROP:-${2:-}}"
-NEW_REPO_ID="${EXTRACT_NEW_REPO_ID:-${3:-}}"
+MODE="${EXTRACT_MODE:-process}"
+CROP="${EXTRACT_CROP:-386 60 642 238}"
+NEW_REPO_ID="${EXTRACT_NEW_REPO_ID:-yen-0/so101-writei-patterns}"
 
 ARGS=(
   --repo_id "${DATASET_REPO_ID:-k1000dai/so101-writei}"
@@ -97,4 +103,4 @@ apptainer exec \
   --writable-tmpfs \
   --pwd "${PBS_O_WORKDIR}" \
   "${APPTAINER_IMAGE}" \
-  python -u examples/dataset/extract_patterns.py "${ARGS[@]}" 2>&1 | tee -a "${LOG_FILE}"
+  python -u src/lerobot/scripts/lerobot_extract_patterns.py "${ARGS[@]}" 2>&1 | tee -a "${LOG_FILE}"

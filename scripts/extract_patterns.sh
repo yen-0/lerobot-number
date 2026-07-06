@@ -13,9 +13,9 @@ if [[ -n "${HF_TOKEN:-}" ]]; then
   export HF_TOKEN
 fi
 
-MODE="${EXTRACT_MODE:-${1:-calibrate}}"
-CROP="${EXTRACT_CROP:-${2:-}}"
-NEW_REPO_ID="${EXTRACT_NEW_REPO_ID:-${3:-}}"
+MODE="${EXTRACT_MODE:-process}"
+CROP="${EXTRACT_CROP:-386 60 642 238}"
+NEW_REPO_ID="${EXTRACT_NEW_REPO_ID:-yen-0/so101-writei-patterns}"
 
 ARGS=(
   --repo_id "${DATASET_REPO_ID:-k1000dai/so101-writei}"
@@ -32,4 +32,4 @@ if [[ -n "${NEW_REPO_ID}" ]]; then
   ARGS+=(--push_to_hub)
 fi
 
-uv run python examples/dataset/extract_patterns.py "${ARGS[@]}"
+uv run python src/lerobot/scripts/lerobot_extract_patterns.py "${ARGS[@]}"

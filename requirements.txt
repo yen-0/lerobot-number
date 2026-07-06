@@ -1,0 +1,10 @@
+# requirements.txt
+# Install LeRobot and its required dependencies locally on Windows
+
+-e .
+torch
+torchvision
+pillow
+huggingface_hub
+datasets
+numpy

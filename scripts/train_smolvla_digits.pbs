@@ -18,6 +18,12 @@ if [[ ! -f config.env ]]; then
 fi
 source config.env
 
+if [[ -z "${HF_TOKEN:-}" || "${HF_TOKEN}" == "hf_YOUR_TOKEN_HERE" ]]; then
+  echo "[WARNING] HF_TOKEN is not set or is still the placeholder in config.env!" >&2
+else
+  echo "[INFO] HF_TOKEN loaded successfully (starts with: ${HF_TOKEN:0:8}...)"
+fi
+
 # 3. Prepare cache directories on the shared filesystem.
 if [[ -d "/work/gw13/w13009" ]]; then
   CACHE_BASE="/work/gw13/w13009/.cache"

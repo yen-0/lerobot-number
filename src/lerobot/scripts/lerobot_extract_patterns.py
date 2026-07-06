@@ -19,16 +19,9 @@
 import argparse
 import logging
 from pathlib import Path
-import sys
 import numpy as np
 import torch
 from PIL import Image
-
-# Add src to python path
-ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
 
 from lerobot.datasets import LeRobotDataset
 from lerobot.utils.utils import init_logging
@@ -50,8 +43,9 @@ def parse_args():
         "--crop", 
         type=int, 
         nargs=4, 
+        default=[386, 60, 642, 238],
         metavar=("X_MIN", "Y_MIN", "X_MAX", "Y_MAX"),
-        help="Crop box coordinates: x_min y_min x_max y_max"
+        help="Crop box coordinates: x_min y_min x_max y_max (default: 386 60 642 238)"
     )
     parser.add_argument("--push_to_hub", action="store_true", help="Push the new dataset to the Hugging Face Hub")
     return parser.parse_args()
