@@ -3,6 +3,15 @@ set -euo pipefail
 
 cd "${PBS_O_WORKDIR:-$(pwd)}"
 
+# Source config.env if it exists
+if [[ -f config.env ]]; then
+  source config.env
+fi
+
+if [[ -n "${HF_TOKEN:-}" ]]; then
+  export HF_TOKEN
+fi
+
 DATASET_REPO_ID="${DATASET_REPO_ID:-k1000dai/so101-writei}"
 OUTPUT_DIR="${OUTPUT_DIR:-outputs/train/smolvla_so101_digits}"
 JOB_NAME="${JOB_NAME:-smolvla_so101_digits}"
@@ -12,9 +21,10 @@ BATCH_SIZE="${BATCH_SIZE:-8}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 MNIST_EXAMPLES_PER_DIGIT="${MNIST_EXAMPLES_PER_DIGIT:-64}"
 MNIST_CACHE_DIR="${MNIST_CACHE_DIR:-}"
+USE_MNIST="${USE_MNIST:-false}"
 DIGIT_MAP="${DIGIT_MAP:-}"
 POLICY_REPO_ID="${POLICY_REPO_ID:-}"
-PUSH_TO_HUB="${PUSH_TO_HUB:-false}"
+PUSH_TO_HUB="${PUSH_TO_HUB:-true}"
 
 ARGS=(
   --dataset.repo_id "${DATASET_REPO_ID}"
@@ -26,6 +36,12 @@ ARGS=(
   --num_workers "${NUM_WORKERS}"
   --mnist_examples_per_digit "${MNIST_EXAMPLES_PER_DIGIT}"
 )
+
+if [[ "${USE_MNIST}" == "true" ]]; then
+  ARGS+=(--use-mnist)
+else
+  ARGS+=(--no-use-mnist)
+fi
 
 if [[ -n "${MNIST_CACHE_DIR}" ]]; then
   ARGS+=(--mnist_cache_dir "${MNIST_CACHE_DIR}")

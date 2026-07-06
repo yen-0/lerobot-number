@@ -64,9 +64,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log_freq", type=int, default=20)
     parser.add_argument("--mnist_examples_per_digit", type=int, default=64)
     parser.add_argument("--mnist_cache_dir", default=None)
+    parser.add_argument("--use-mnist", dest="use_mnist", action=argparse.BooleanOptionalAction, default=False, help="Whether to use MNIST reference images for auxiliary supervision")
     parser.add_argument("--digit_map", default=None)
     parser.add_argument("--policy.repo_id", dest="policy_repo_id", default=None)
-    parser.add_argument("--push_to_hub", action="store_true")
+    parser.add_argument("--push_to_hub", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--streaming", action="store_true", help="Stream the dataset from Hub instead of caching it locally")
     parser.add_argument("--resume", action="store_true", help="Auto-resume from the latest checkpoint in output_dir if it exists")
     return parser.parse_args()
@@ -120,6 +121,11 @@ def _resolve_output_path(path: str) -> Path:
 
 def main() -> None:
     args = parse_args()
+    if args.push_to_hub and not args.policy_repo_id:
+        raise ValueError(
+            "--policy.repo_id is required when --push_to_hub is enabled (which is the default). "
+            "Use --no-push-to-hub to disable pushing to the Hugging Face Hub."
+        )
     init_logging(console_level="INFO", file_level="DEBUG")
     start_time = time.time()
 
@@ -232,14 +238,18 @@ def main() -> None:
         dataloader_kwargs["prefetch_factor"] = 2
     dataloader = torch.utils.data.DataLoader(dataset, **dataloader_kwargs)
 
-    mnist_cache = (
-        _resolve_output_path(args.mnist_cache_dir)
-        if args.mnist_cache_dir
-        else output_dir / "mnist_reference_bank.pt"
-    )
-    logging.info("MNIST cache path: %s", mnist_cache)
-    digit_bank = _load_mnist_bank(mnist_cache, args.mnist_examples_per_digit)
-    logging.info("Loaded MNIST digit bank with %d digits", len(digit_bank))
+    if args.use_mnist:
+        mnist_cache = (
+            _resolve_output_path(args.mnist_cache_dir)
+            if args.mnist_cache_dir
+            else output_dir / "mnist_reference_bank.pt"
+        )
+        logging.info("MNIST cache path: %s", mnist_cache)
+        digit_bank = _load_mnist_bank(mnist_cache, args.mnist_examples_per_digit)
+        logging.info("Loaded MNIST digit bank with %d digits", len(digit_bank))
+    else:
+        digit_bank = None
+        logging.info("MNIST dataset is disabled. No auxiliary MNIST reference images will be used.")
 
     optimizer = config.get_optimizer_preset().build(policy.parameters())
     logging.info("Optimizer initialized: %s", optimizer.__class__.__name__)
@@ -279,10 +289,11 @@ def main() -> None:
             digit_labels = digit_labels.to(device=device, dtype=torch.long).view(-1)
             logging.info("Batch %s digit labels resolved: shape=%s", step + 1, tuple(digit_labels.shape))
 
-            refs_start = time.time()
-            digit_references = sample_digit_references(digit_bank, digit_labels.cpu()).to(device)
-            logging.info("Batch %s sampled digit references in %.2fs", step + 1, time.time() - refs_start)
-            processed_batch[config.digit_reference_image_key] = digit_references
+            if digit_bank is not None:
+                refs_start = time.time()
+                digit_references = sample_digit_references(digit_bank, digit_labels.cpu()).to(device)
+                logging.info("Batch %s sampled digit references in %.2fs", step + 1, time.time() - refs_start)
+                processed_batch[config.digit_reference_image_key] = digit_references
 
             forward_start = time.time()
             loss, loss_dict = policy.forward(processed_batch)
@@ -329,7 +340,7 @@ def main() -> None:
 
     if args.push_to_hub:
         if not args.policy_repo_id:
-            raise ValueError("--policy.repo_id is required when --push_to_hub is set")
+            raise ValueError("--policy.repo_id is required when --push_to_hub is enabled")
         logging.info("Pushing artifacts to the Hub: %s", args.policy_repo_id)
         policy.push_to_hub(args.policy_repo_id)
         preprocessor.push_to_hub(args.policy_repo_id)
