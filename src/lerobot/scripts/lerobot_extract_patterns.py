@@ -30,7 +30,7 @@ def main():
     init_logging(console_level="INFO", file_level="DEBUG")
 
     # Hardcoded parameters
-    src_repo_id = "k1000dai/so101-writei"
+    src_repo_id = "k1000dai/so101-write"
     new_repo_id = "yen-0/so101-writei-patterns"
     crop_coords = [386, 60, 642, 238] # x_min y_min x_max y_max
 
@@ -52,9 +52,12 @@ def main():
     crop_height = y_max - y_min
     logging.info(f"Crop dimensions: width={crop_width}, height={crop_height}")
 
-    # Setup features for the new dataset
+    # Setup features for the new dataset, excluding system/implicit ones
+    EXCLUDE_KEYS = {"index", "episode_index", "timestamp", "frame_index", "task_index"}
     new_features = {}
     for key, val in src_dataset.features.items():
+        if key in EXCLUDE_KEYS:
+            continue
         new_features[key] = val.copy() if hasattr(val, "copy") else dict(val)
 
     new_features["observation.target_drawing"] = {
@@ -95,7 +98,9 @@ def main():
             frame_data = src_dataset[idx]
 
             new_frame = {}
-            for key in src_dataset.features:
+            for key in new_features:
+                if key == "observation.target_drawing":
+                    continue
                 val = frame_data[key]
                 if isinstance(val, torch.Tensor):
                     if src_dataset.features[key]["dtype"] in ["video", "image"]:
