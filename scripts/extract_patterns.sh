@@ -13,9 +13,9 @@ if [[ -n "${HF_TOKEN:-}" ]]; then
   export HF_TOKEN
 fi
 
-MODE="${1:-calibrate}"
-CROP="${2:-}"
-NEW_REPO_ID="${3:-}"
+MODE="${EXTRACT_MODE:-${1:-calibrate}}"
+CROP="${EXTRACT_CROP:-${2:-}}"
+NEW_REPO_ID="${EXTRACT_NEW_REPO_ID:-${3:-}}"
 
 ARGS=(
   --repo_id "${DATASET_REPO_ID:-k1000dai/so101-writei}"
