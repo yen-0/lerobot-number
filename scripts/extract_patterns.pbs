@@ -8,8 +8,9 @@
 
 set -euo pipefail
 
-# 1. Move to the directory where the job was submitted.
-cd "${PBS_O_WORKDIR:-$(pwd)}"
+# 1. Bind and move to the directory where the job was submitted.
+PBS_O_WORKDIR="${PBS_O_WORKDIR:-$(pwd)}"
+cd "${PBS_O_WORKDIR}"
 
 # 2. Source local job configuration.
 if [[ ! -f config.env ]]; then
@@ -48,43 +49,24 @@ export APPTAINERENV_HF_LEROBOT_HOME=$HF_LEROBOT_HOME
 export APPTAINERENV_HF_DATASETS_CACHE=$HF_DATASETS_CACHE
 export APPTAINERENV_PYTHONPATH=$PYTHONPATH
 export APPTAINERENV_PYTHONUNBUFFERED=1
-export APPTAINERENV_PBS_O_WORKDIR="${PBS_O_WORKDIR:-$(pwd)}"
+export APPTAINERENV_PBS_O_WORKDIR="$PBS_O_WORKDIR"
 
 if [[ -n "${HF_TOKEN:-}" ]]; then
   export APPTAINERENV_HF_TOKEN="$HF_TOKEN"
 fi
 
-# 5. Load the Apptainer module and build script arguments.
+# 5. Load the Apptainer module.
 module load "${APPTAINER_MODULE}"
 
-MODE="${EXTRACT_MODE:-process}"
-CROP="${EXTRACT_CROP:-386 60 642 238}"
-NEW_REPO_ID="${EXTRACT_NEW_REPO_ID:-yen-0/so101-writei-patterns}"
-
-ARGS=(
-  --repo_id "${DATASET_REPO_ID:-k1000dai/so101-writei}"
-  --mode "${MODE}"
-)
-
-if [[ -n "${CROP}" ]]; then
-  ARGS+=(--crop ${CROP})
-fi
-
-if [[ -n "${NEW_REPO_ID}" ]]; then
-  ARGS+=(--new_repo_id "${NEW_REPO_ID}")
-  ARGS+=(--push_to_hub)
-fi
-
-LOG_DIR="${PBS_O_WORKDIR:-$(pwd)}/logs"
+LOG_DIR="${PBS_O_WORKDIR}/logs"
 mkdir -p "${LOG_DIR}"
 LOG_FILE="${LOG_DIR}/extract_patterns_${PBS_JOBID:-manual}_$(date +%Y%m%d_%H%M%S).log"
 
-echo "[$(date -Is)] starting extract patterns job in mode: ${MODE}"
+echo "[$(date -Is)] starting extract patterns job"
 echo "[$(date -Is)] log file: ${LOG_FILE}"
 echo "[$(date -Is)] apptainer image: ${APPTAINER_IMAGE}"
-echo "[$(date -Is)] args: ${ARGS[*]}"
 
-# 6. Run training/processing inside the container with explicit write permissions
+# 6. Run processing inside the container with explicit write permissions
 BINDS=(
   --bind "${PBS_O_WORKDIR}:${PBS_O_WORKDIR}:rw"
   --bind "$HOME:$HOME:rw"
@@ -103,4 +85,4 @@ apptainer exec \
   --writable-tmpfs \
   --pwd "${PBS_O_WORKDIR}" \
   "${APPTAINER_IMAGE}" \
-  python -u src/lerobot/scripts/lerobot_extract_patterns.py "${ARGS[@]}" 2>&1 | tee -a "${LOG_FILE}"
+  python -u src/lerobot/scripts/lerobot_extract_patterns.py 2>&1 | tee -a "${LOG_FILE}"

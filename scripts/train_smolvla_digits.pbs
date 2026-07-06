@@ -8,8 +8,9 @@
 
 set -euo pipefail
 
-# 1. Move to the directory where the job was submitted.
-cd "${PBS_O_WORKDIR:-$(pwd)}"
+# 1. Bind and move to the directory where the job was submitted.
+PBS_O_WORKDIR="${PBS_O_WORKDIR:-$(pwd)}"
+cd "${PBS_O_WORKDIR}"
 
 # 2. Source local job configuration.
 if [[ ! -f config.env ]]; then
