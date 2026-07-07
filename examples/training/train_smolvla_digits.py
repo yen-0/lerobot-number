@@ -145,9 +145,27 @@ def main() -> None:
                 checkpoints,
                 key=lambda x: int(x.name.split("-")[-1])
             )
-            checkpoint_dir = checkpoints[-1]
-            start_step = int(checkpoint_dir.name.split("-")[-1])
-            logging.info("Found latest checkpoint to resume: %s (starting from step %d)", checkpoint_dir, start_step)
+            for ckpt in reversed(checkpoints):
+                config_path = ckpt / "config.json"
+                weights_path = ckpt / "model.safetensors"
+                opt_path = ckpt / "optimizer.bin"
+                # A checkpoint is valid if all required files exist and are not empty
+                if (
+                    config_path.exists() and config_path.stat().st_size > 0
+                    and weights_path.exists() and weights_path.stat().st_size > 0
+                    and opt_path.exists() and opt_path.stat().st_size > 0
+                ):
+                    checkpoint_dir = ckpt
+                    start_step = int(checkpoint_dir.name.split("-")[-1])
+                    logging.info("Found latest valid checkpoint to resume: %s (starting from step %d)", checkpoint_dir, start_step)
+                    break
+                else:
+                    logging.warning("Checkpoint %s is corrupted or incomplete. Deleting and skipping.", ckpt)
+                    import shutil
+                    try:
+                        shutil.rmtree(ckpt)
+                    except Exception as e:
+                        logging.error("Failed to delete corrupted checkpoint %s: %s", ckpt, e)
 
     device = torch.device(args.device)
     logging.info("Device: %s", device)
@@ -349,11 +367,23 @@ def main() -> None:
 
             if step > start_step and step % args.save_freq == 0:
                 checkpoint_dir = output_dir / f"checkpoint-{step}"
+                tmp_checkpoint_dir = output_dir / f".checkpoint-{step}.tmp"
                 logging.info("Saving checkpoint to %s", checkpoint_dir)
-                policy.save_pretrained(checkpoint_dir)
-                preprocessor.save_pretrained(checkpoint_dir)
-                postprocessor.save_pretrained(checkpoint_dir)
-                torch.save(optimizer.state_dict(), checkpoint_dir / "optimizer.bin")
+                if tmp_checkpoint_dir.exists():
+                    import shutil
+                    shutil.rmtree(tmp_checkpoint_dir)
+                tmp_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+                policy.save_pretrained(tmp_checkpoint_dir)
+                preprocessor.save_pretrained(tmp_checkpoint_dir)
+                postprocessor.save_pretrained(tmp_checkpoint_dir)
+                torch.save(optimizer.state_dict(), tmp_checkpoint_dir / "optimizer.bin")
+
+                # Atomic rename
+                if checkpoint_dir.exists():
+                    import shutil
+                    shutil.rmtree(checkpoint_dir)
+                tmp_checkpoint_dir.rename(checkpoint_dir)
 
             step += 1
             if step >= args.steps:
