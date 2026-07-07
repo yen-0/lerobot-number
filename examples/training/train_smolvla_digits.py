@@ -201,6 +201,7 @@ def main() -> None:
     delta_timestamps |= {
         key: [t / dataset_metadata.fps for t in config.observation_delta_indices]
         for key in config.image_features
+        if key != "observation.target_drawing"
     }
 
     if args.streaming:
