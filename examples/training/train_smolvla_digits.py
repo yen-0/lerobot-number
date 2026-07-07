@@ -53,7 +53,7 @@ from lerobot.utils.utils import init_logging
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset.repo_id", dest="dataset_repo_id", default="k1000dai/so101-writei")
+    parser.add_argument("--dataset.repo_id", dest="dataset_repo_id", default="k1000dai/so101-write")
     parser.add_argument("--output_dir", default="outputs/train/smolvla_so101_digits")
     parser.add_argument("--job_name", default="smolvla_so101_digits")
     parser.add_argument("--policy.device", dest="device", default="cuda")

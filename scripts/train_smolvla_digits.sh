@@ -12,7 +12,7 @@ if [[ -n "${HF_TOKEN:-}" ]]; then
   export HF_TOKEN
 fi
 
-DATASET_REPO_ID="${DATASET_REPO_ID:-k1000dai/so101-writei}"
+DATASET_REPO_ID="${DATASET_REPO_ID:-k1000dai/so101-write}"
 OUTPUT_DIR="${OUTPUT_DIR:-outputs/train/smolvla_so101_digits}"
 JOB_NAME="${JOB_NAME:-smolvla_so101_digits}"
 DEVICE="${DEVICE:-cuda}"
