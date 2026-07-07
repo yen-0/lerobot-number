@@ -140,6 +140,12 @@ def log_memory_usage(stage: str) -> None:
 
 
 def main() -> None:
+    import sys
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+        sys.stderr.reconfigure(line_buffering=True)
+    except Exception:
+        pass
     args = parse_args()
     if args.push_to_hub and not args.policy_repo_id:
         raise ValueError(
@@ -325,6 +331,8 @@ def main() -> None:
     while step < args.steps:
         if step % 10 == 0:
             log_memory_usage(f"Step {step} loop start")
+        if step % 100 == 0:
+            torch.cuda.empty_cache()
         try:
             logging.info("Waiting for batch %s/%s from dataloader...", step + 1, args.steps)
             fetch_start = time.time()
@@ -367,14 +375,21 @@ def main() -> None:
             logging.info("Batch %s starting forward pass...", step + 1)
             forward_start = time.time()
             loss, loss_dict = policy.forward(processed_batch)
-            logging.info("Batch %s forward pass in %.2fs", step + 1, time.time() - forward_start)
+            logging.info("Batch %s forward pass completed in %.2fs", step + 1, time.time() - forward_start)
+
+            log_memory_usage(f"Batch {step + 1} before backward")
+            logging.info("Batch %s starting backward pass...", step + 1)
             backward_start = time.time()
             loss.backward()
-            logging.info("Batch %s backward pass in %.2fs", step + 1, time.time() - backward_start)
+            logging.info("Batch %s backward pass completed in %.2fs", step + 1, time.time() - backward_start)
+
+            log_memory_usage(f"Batch {step + 1} after backward")
+            logging.info("Batch %s starting optimizer step...", step + 1)
             optim_start = time.time()
             optimizer.step()
             optimizer.zero_grad()
-            logging.info("Batch %s optimizer step in %.2fs", step + 1, time.time() - optim_start)
+            logging.info("Batch %s optimizer step completed in %.2fs", step + 1, time.time() - optim_start)
+            log_memory_usage(f"Batch {step + 1} after optimizer")
 
             if step % args.log_freq == 0:
                 now = time.time()
