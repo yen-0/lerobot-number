@@ -35,7 +35,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from lerobot.configs import FeatureType
+from lerobot.configs import FeatureType, PolicyFeature
 from lerobot.datasets import LeRobotDataset, LeRobotDatasetMetadata, StreamingLeRobotDataset
 from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
 from lerobot.policies.smolvla.digit_utils import (
@@ -162,6 +162,11 @@ def main() -> None:
     digit_map = load_digit_map(args.digit_map)
     logging.info("Digit map entries: %d", len(digit_map))
     features = dataset_to_policy_features(dataset_metadata.features)
+    # Manually inject target_drawing as a visual feature
+    features["observation.target_drawing"] = PolicyFeature(
+        type=FeatureType.VISUAL,
+        shape=(3, 178, 256)
+    )
     output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
     input_features = {key: ft for key, ft in features.items() if key not in output_features}
 
@@ -257,6 +262,25 @@ def main() -> None:
         logging.info("Loading optimizer state from checkpoint: %s", checkpoint_dir / "optimizer.bin")
         optimizer.load_state_dict(torch.load(checkpoint_dir / "optimizer.bin", map_location=device))
     step = start_step
+    # Load target drawings for all episodes into RAM (Approach B)
+    logging.info("Loading target drawings for all episodes into RAM...")
+    target_drawings_dir = Path("outputs/target_drawings")
+    from PIL import Image
+    import numpy as np
+    target_drawings = []
+    for ep_idx in range(dataset_metadata.total_episodes):
+        img_path = target_drawings_dir / f"episode_{ep_idx}.png"
+        if not img_path.exists():
+            raise FileNotFoundError(
+                f"Missing target drawing for episode {ep_idx} at {img_path}. "
+                "Please run `qsub scripts/extract_patterns.pbs` (or local equivalent) first."
+            )
+        img_pil = Image.open(img_path).convert("RGB")
+        img_np = np.array(img_pil, dtype=np.float32) / 255.0
+        img_tensor = torch.from_numpy(img_np).permute(2, 0, 1) # (C, H, W)
+        target_drawings.append(img_tensor)
+    logging.info("Loaded %d target drawings successfully.", len(target_drawings))
+
     last_log_time = time.time()
     dataloader_iter = iter(dataloader)
     while step < args.steps:
@@ -265,6 +289,10 @@ def main() -> None:
             fetch_start = time.time()
             raw_batch = next(dataloader_iter)
             logging.info("Batch %s fetched in %.2fs", step + 1, time.time() - fetch_start)
+            # Inject observation.target_drawing into raw_batch (Approach B)
+            ep_indices = raw_batch["episode_index"].view(-1).cpu().tolist()
+            batch_targets = torch.stack([target_drawings[ep_idx] for ep_idx in ep_indices])
+            raw_batch["observation.target_drawing"] = batch_targets
         except StopIteration:
             logging.info("Dataloader exhausted, restarting iterator")
             dataloader_iter = iter(dataloader)
