@@ -17,10 +17,12 @@
 """Extract patterns from the end of videos in a dataset, crop them, and save/push as a new feature."""
 
 import logging
+import os
 from pathlib import Path
 import numpy as np
 import torch
 from PIL import Image
+from torch.utils.data import DataLoader
 
 from lerobot.datasets import LeRobotDataset
 from lerobot.utils.utils import init_logging
@@ -30,7 +32,7 @@ def main():
     init_logging(console_level="INFO", file_level="DEBUG")
 
     # Hardcoded parameters
-    src_repo_id = "k1000dai/so101-write"
+    src_repo_id = "k1000dai/so101-writei"
     new_repo_id = "yen-0/so101-writei-patterns"
     crop_coords = [386, 60, 642, 238] # x_min y_min x_max y_max
 
@@ -76,12 +78,13 @@ def main():
         robot_type=src_dataset.meta.robot_type,
     )
 
+    # Pre-extract target drawings for all episodes (only 1 frame read per episode)
+    logging.info("Pre-extracting target drawings for all episodes...")
+    target_drawings = []
     for ep_idx in range(src_dataset.num_episodes):
-        from_idx = src_dataset.meta.episodes["dataset_from_index"][ep_idx]
         to_idx = src_dataset.meta.episodes["dataset_to_index"][ep_idx]
         last_frame_idx = to_idx - 1
 
-        # Extract the cropped drawing from the last frame
         last_frame_data = src_dataset[last_frame_idx]
         last_img_tensor = last_frame_data[camera_key]
         last_img_np = last_img_tensor.permute(1, 2, 0).cpu().numpy()
@@ -89,41 +92,60 @@ def main():
             last_img_np = (last_img_np * 255.0).clip(0, 255).astype(np.uint8)
         last_img_pil = Image.fromarray(last_img_np)
         cropped_pil = last_img_pil.crop((x_min, y_min, x_max, y_max))
-        cropped_np = np.array(cropped_pil)
+        target_drawings.append(np.array(cropped_pil))
+    logging.info("Target drawings pre-extracted successfully.")
 
-        logging.info(f"Episode {ep_idx + 1}/{src_dataset.num_episodes}: frames {from_idx} to {to_idx - 1}...")
+    # Setup PyTorch DataLoader with parallel workers for fast frame decoding
+    logging.info("Initializing DataLoader with parallel workers...")
+    num_workers = min(16, os.cpu_count() or 8) if os.name != "nt" else 0
+    dataloader = DataLoader(
+        src_dataset,
+        batch_size=None,
+        num_workers=num_workers,
+        shuffle=False,
+    )
 
-        # Write all frames of the episode
-        for idx in range(from_idx, to_idx):
-            frame_data = src_dataset[idx]
+    current_ep_idx = 0
+    logging.info(f"Processing episode 1/{src_dataset.num_episodes}...")
 
-            new_frame = {}
-            for key in new_features:
-                if key == "observation.target_drawing":
-                    continue
-                val = frame_data[key]
-                if isinstance(val, torch.Tensor):
-                    if src_dataset.features[key]["dtype"] in ["video", "image"]:
-                        # Convert (C, H, W) to (H, W, C)
-                        val_np = val.permute(1, 2, 0).cpu().numpy()
-                        if val_np.dtype == np.uint8:
-                            new_frame[key] = val_np
-                        else:
-                            new_frame[key] = (val_np * 255.0).clip(0, 255).astype(np.uint8)
+    # Iterate over all frames in the dataset sequentially
+    for frame_idx, frame_data in enumerate(dataloader):
+        ep_idx = int(frame_data["episode_index"])
+
+        # If transitioned to a new episode, save the previous episode
+        if ep_idx != current_ep_idx:
+            new_dataset.save_episode()
+            current_ep_idx = ep_idx
+            logging.info(f"Processing episode {current_ep_idx + 1}/{src_dataset.num_episodes}...")
+
+        new_frame = {}
+        for key in new_features:
+            if key == "observation.target_drawing":
+                continue
+            val = frame_data[key]
+            if isinstance(val, torch.Tensor):
+                if src_dataset.features[key]["dtype"] in ["video", "image"]:
+                    # Convert (C, H, W) to (H, W, C)
+                    val_np = val.permute(1, 2, 0).cpu().numpy()
+                    if val_np.dtype == np.uint8:
+                        new_frame[key] = val_np
                     else:
-                        new_frame[key] = val.cpu().numpy()
+                        new_frame[key] = (val_np * 255.0).clip(0, 255).astype(np.uint8)
                 else:
-                    new_frame[key] = val
+                    new_frame[key] = val.cpu().numpy()
+            else:
+                new_frame[key] = val
 
-            # Set task instruction
-            new_frame["task"] = frame_data["task"]
+        # Set task instruction
+        new_frame["task"] = frame_data["task"]
 
-            # Set the cropped target drawing (repeated for all frames)
-            new_frame["observation.target_drawing"] = cropped_np
+        # Set the cropped target drawing (repeated for all frames)
+        new_frame["observation.target_drawing"] = target_drawings[ep_idx]
 
-            new_dataset.add_frame(new_frame)
+        new_dataset.add_frame(new_frame)
 
-        new_dataset.save_episode()
+    # Save the final episode
+    new_dataset.save_episode()
 
     new_dataset.finalize()
     logging.info(f"Dataset successfully created locally at: {new_dataset.root}")
