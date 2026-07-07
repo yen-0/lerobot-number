@@ -119,6 +119,26 @@ def _resolve_output_path(path: str) -> Path:
     return _resolve_workdir() / output_path
 
 
+def log_memory_usage(stage: str) -> None:
+    try:
+        import psutil
+        process = psutil.Process()
+        ram_usage_mb = process.memory_info().rss / (1024 * 1024)
+        logging.info("[Memory Check] %s - CPU RAM Usage: %.2f MB", stage, ram_usage_mb)
+    except Exception as e:
+        logging.debug("Could not log CPU memory usage: %s", e)
+
+    try:
+        import torch
+        if torch.cuda.is_available():
+            allocated = torch.cuda.memory_allocated() / (1024 * 1024)
+            reserved = torch.cuda.memory_reserved() / (1024 * 1024)
+            max_allocated = torch.cuda.max_memory_allocated() / (1024 * 1024)
+            logging.info("[Memory Check] %s - GPU VRAM: Allocated %.2f MB, Reserved %.2f MB, Max %.2f MB", stage, allocated, reserved, max_allocated)
+    except Exception as e:
+        logging.debug("Could not log GPU memory usage: %s", e)
+
+
 def main() -> None:
     args = parse_args()
     if args.push_to_hub and not args.policy_repo_id:
@@ -369,39 +389,58 @@ def main() -> None:
                 checkpoint_dir = output_dir / f"checkpoint-{step}"
                 tmp_checkpoint_dir = output_dir / f".checkpoint-{step}.tmp"
                 logging.info("Saving checkpoint to %s", checkpoint_dir)
+                log_memory_usage("Start checkpoint saving")
                 if tmp_checkpoint_dir.exists():
                     import shutil
                     shutil.rmtree(tmp_checkpoint_dir)
                 tmp_checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
                 # Move policy to CPU and clear CUDA cache to prevent GPU/VRAM OOM
+                logging.info("Moving policy to CPU...")
                 policy.to("cpu")
                 torch.cuda.empty_cache()
+                log_memory_usage("After moving policy to CPU")
 
+                logging.info("Saving policy weights...")
                 policy.save_pretrained(tmp_checkpoint_dir)
+                log_memory_usage("After saving policy weights")
+
+                logging.info("Saving preprocessor and postprocessor configs...")
                 preprocessor.save_pretrained(tmp_checkpoint_dir)
                 postprocessor.save_pretrained(tmp_checkpoint_dir)
 
                 # Move optimizer state dict to CPU before saving to prevent OOM
+                logging.info("Extracting optimizer state dict...")
                 opt_state_dict = optimizer.state_dict()
+                log_memory_usage("After opt_state_dict extraction")
+
+                logging.info("Deepcopying and offloading optimizer state dict to CPU...")
                 import copy
                 opt_state_dict_cpu = copy.deepcopy(opt_state_dict)
                 for param_id, param_state in opt_state_dict_cpu.get("state", {}).items():
                     for k, v in param_state.items():
                         if isinstance(v, torch.Tensor):
                             param_state[k] = v.cpu()
+                log_memory_usage("After converting optimizer to CPU")
+
+                logging.info("Saving optimizer state dict to disk...")
                 torch.save(opt_state_dict_cpu, tmp_checkpoint_dir / "optimizer.bin")
                 del opt_state_dict, opt_state_dict_cpu
+                log_memory_usage("After saving optimizer state")
 
                 # Restore policy to original device
+                logging.info("Moving policy back to original device (%s)...", device)
                 policy.to(device)
                 torch.cuda.empty_cache()
+                log_memory_usage("After restoring policy to device")
 
                 # Atomic rename
+                logging.info("Renaming temporary checkpoint directory to %s", checkpoint_dir)
                 if checkpoint_dir.exists():
                     import shutil
                     shutil.rmtree(checkpoint_dir)
                 tmp_checkpoint_dir.rename(checkpoint_dir)
+                logging.info("Checkpoint saved successfully at step %d", step)
 
             step += 1
             if step >= args.steps:
@@ -411,11 +450,18 @@ def main() -> None:
             raise
 
     logging.info("Saving final artifacts to %s", output_dir)
+    log_memory_usage("Start final artifacts save")
+    logging.info("Moving policy to CPU...")
     policy.to("cpu")
     torch.cuda.empty_cache()
+    log_memory_usage("After moving policy to CPU for final save")
+    logging.info("Saving policy weights...")
     policy.save_pretrained(output_dir)
+    log_memory_usage("After saving policy weights for final save")
+    logging.info("Saving preprocessor and postprocessor configs...")
     preprocessor.save_pretrained(output_dir)
     postprocessor.save_pretrained(output_dir)
+    log_memory_usage("Completed final artifacts save")
 
     if args.push_to_hub:
         if not args.policy_repo_id:
