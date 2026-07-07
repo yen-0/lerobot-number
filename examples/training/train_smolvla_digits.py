@@ -374,10 +374,28 @@ def main() -> None:
                     shutil.rmtree(tmp_checkpoint_dir)
                 tmp_checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
+                # Move policy to CPU and clear CUDA cache to prevent GPU/VRAM OOM
+                policy.to("cpu")
+                torch.cuda.empty_cache()
+
                 policy.save_pretrained(tmp_checkpoint_dir)
                 preprocessor.save_pretrained(tmp_checkpoint_dir)
                 postprocessor.save_pretrained(tmp_checkpoint_dir)
-                torch.save(optimizer.state_dict(), tmp_checkpoint_dir / "optimizer.bin")
+
+                # Move optimizer state dict to CPU before saving to prevent OOM
+                opt_state_dict = optimizer.state_dict()
+                import copy
+                opt_state_dict_cpu = copy.deepcopy(opt_state_dict)
+                for param_id, param_state in opt_state_dict_cpu.get("state", {}).items():
+                    for k, v in param_state.items():
+                        if isinstance(v, torch.Tensor):
+                            param_state[k] = v.cpu()
+                torch.save(opt_state_dict_cpu, tmp_checkpoint_dir / "optimizer.bin")
+                del opt_state_dict, opt_state_dict_cpu
+
+                # Restore policy to original device
+                policy.to(device)
+                torch.cuda.empty_cache()
 
                 # Atomic rename
                 if checkpoint_dir.exists():
@@ -393,6 +411,8 @@ def main() -> None:
             raise
 
     logging.info("Saving final artifacts to %s", output_dir)
+    policy.to("cpu")
+    torch.cuda.empty_cache()
     policy.save_pretrained(output_dir)
     preprocessor.save_pretrained(output_dir)
     postprocessor.save_pretrained(output_dir)
