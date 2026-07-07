@@ -52,6 +52,7 @@ policy = SmolVLAPolicy.from_pretrained("lerobot/smolvla_base")
 
 """
 
+import logging
 import math
 from collections import deque
 from typing import Any, TypedDict, Unpack
@@ -480,6 +481,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
                 - "mean": Return scalar mean loss (default, backward compatible)
                 - "none": Return per-sample losses of shape (batch_size,) for RA-BC weighting
         """
+        logging.info("[Forward Start] Batch keys: %s", list(batch.keys()))
         if self.config.adapt_to_pi_aloha:
             batch[OBS_STATE] = self._pi_aloha_decode_state(batch[OBS_STATE])
             batch[ACTION] = self._pi_aloha_encode_actions_inv(batch[ACTION])
@@ -490,8 +492,15 @@ class SmolVLAPolicy(PreTrainedPolicy):
         lang_masks = batch[f"{OBS_LANGUAGE_ATTENTION_MASK}"]
         actions = self.prepare_action(batch)
         actions_is_pad = batch.get("action_is_pad")
+        
+        logging.info("[Forward] Inputs prepared. images count: %d, shapes: %s, state: %s, lang_tokens: %s, actions: %s",
+                     len(images), [img.shape for img in images], state.shape, lang_tokens.shape, actions.shape)
+        
         loss_dict = {}
+        logging.info("[Forward] Running VLAFlowMatching model.forward...")
         losses = self.model.forward(images, img_masks, lang_tokens, lang_masks, state, actions, noise, time)
+        logging.info("[Forward] VLAFlowMatching model.forward completed. losses shape: %s", losses.shape)
+        
         original_action_dim = self.config.action_feature.shape[0]
         losses = losses[:, :, :original_action_dim]
         loss_dict["losses_after_forward"] = losses.clone().mean().item()
@@ -527,6 +536,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
         total_loss = loss
         digit_labels = self._resolve_digit_labels(batch, action_loss_scalar.device)
         if digit_labels is not None:
+            logging.info("[Forward] Resolving digit classification loss...")
             robot_context = self.encode_robot_context(batch).to(dtype=torch.float32)
             if digit_labels.shape[0] != robot_context.shape[0]:
                 raise ValueError(
@@ -543,6 +553,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
 
             digit_reference_images = batch.get(self.config.digit_reference_image_key)
             if digit_reference_images is not None:
+                logging.info("[Forward] Resolving digit alignment loss with reference images...")
                 digit_reference_images = self._prepare_digit_reference_images(
                     digit_reference_images, device=robot_context.device
                 )
@@ -565,6 +576,7 @@ class SmolVLAPolicy(PreTrainedPolicy):
         loss_dict["loss"] = (
             total_loss.mean().item() if isinstance(total_loss, torch.Tensor) and total_loss.ndim > 0 else total_loss.item()
         )
+        logging.info("[Forward End] total_loss: %s", loss_dict["loss"])
         return total_loss, loss_dict
 
     def prepare_images(self, batch):
@@ -953,6 +965,7 @@ class VLAFlowMatching(nn.Module):
         self, images, img_masks, lang_tokens, lang_masks, state, actions, noise=None, time=None
     ) -> Tensor:
         """Do a full training forward pass and compute the loss (batch_size x num_steps x num_motors)"""
+        logging.info("[VLAFlowMatching] forward start")
         if noise is None:
             noise = self.sample_noise(actions.shape, actions.device)
 
@@ -962,9 +975,12 @@ class VLAFlowMatching(nn.Module):
         time_expanded = time[:, None, None]
         x_t = time_expanded * noise + (1 - time_expanded) * actions
         u_t = noise - actions
+        
+        logging.info("[VLAFlowMatching] Embedding prefix...")
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
             images, img_masks, lang_tokens, lang_masks, state=state
         )
+        logging.info("[VLAFlowMatching] Embedding suffix...")
         suffix_embs, suffix_pad_masks, suffix_att_masks = self.embed_suffix(x_t, time)
 
         pad_masks = torch.cat([prefix_pad_masks, suffix_pad_masks], dim=1)
@@ -972,6 +988,9 @@ class VLAFlowMatching(nn.Module):
 
         att_2d_masks = make_att_2d_masks(pad_masks, att_masks)
         position_ids = torch.cumsum(pad_masks, dim=1) - 1
+        
+        logging.info("[VLAFlowMatching] Running VLM transformer forward pass (inputs_embeds shapes: %s, %s)...", 
+                     prefix_embs.shape, suffix_embs.shape)
         (_, suffix_out), _ = self.vlm_with_expert.forward(
             attention_mask=att_2d_masks,
             position_ids=position_ids,
@@ -980,11 +999,14 @@ class VLAFlowMatching(nn.Module):
             use_cache=False,
             fill_kv_cache=False,
         )
+        logging.info("[VLAFlowMatching] VLM transformer forward pass completed. suffix_out shape: %s", suffix_out.shape)
+        
         suffix_out = suffix_out[:, -self.config.chunk_size :]
         # Original openpi code, upcast attention output
         suffix_out = suffix_out.to(dtype=torch.float32)
         v_t = self.action_out_proj(suffix_out)
         losses = F.mse_loss(u_t, v_t, reduction="none")
+        logging.info("[VLAFlowMatching] forward end")
         return losses
 
     def sample_actions(

@@ -323,6 +323,8 @@ def main() -> None:
     last_log_time = time.time()
     dataloader_iter = iter(dataloader)
     while step < args.steps:
+        if step % 10 == 0:
+            log_memory_usage(f"Step {step} loop start")
         try:
             logging.info("Waiting for batch %s/%s from dataloader...", step + 1, args.steps)
             fetch_start = time.time()
@@ -362,6 +364,7 @@ def main() -> None:
                 logging.info("Batch %s sampled digit references in %.2fs", step + 1, time.time() - refs_start)
                 processed_batch[config.digit_reference_image_key] = digit_references
 
+            logging.info("Batch %s starting forward pass...", step + 1)
             forward_start = time.time()
             loss, loss_dict = policy.forward(processed_batch)
             logging.info("Batch %s forward pass in %.2fs", step + 1, time.time() - forward_start)
