@@ -19,9 +19,11 @@
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import json
 import logging
 import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -72,6 +74,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resume", action="store_true", help="Auto-resume from the latest checkpoint in output_dir if it exists")
     parser.add_argument("--policy.gradient_checkpointing", dest="gradient_checkpointing", action=argparse.BooleanOptionalAction, default=True, help="Enable gradient checkpointing to reduce VRAM usage")
     parser.add_argument("--use-amp", dest="use_amp", action=argparse.BooleanOptionalAction, default=True, help="Whether to use Automatic Mixed Precision (AMP) for training")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Number of update steps to accumulate before performing a backward/update pass")
+    parser.add_argument("--policy.freeze_vision_encoder", dest="freeze_vision_encoder", action=argparse.BooleanOptionalAction, default=False, help="Whether to freeze the vision encoder")
+    parser.add_argument("--policy.train_expert_only", dest="train_expert_only", action=argparse.BooleanOptionalAction, default=False, help="Whether to freeze the VLM and train only the action expert and projections")
+    parser.add_argument("--heartbeat_timeout", type=int, default=300, help="Seconds without a training-loop heartbeat before dumping Python stack traces")
+    parser.add_argument("--diagnostic_dump_interval", type=int, default=0, help="If positive, dump all Python stack traces to stderr every N seconds")
     return parser.parse_args()
 
 
@@ -156,6 +163,132 @@ def log_disk_usage(path: Path) -> None:
         logging.debug("Could not log disk usage: %s", e)
 
 
+def log_trainable_parameters(policy: torch.nn.Module) -> None:
+    total_params = sum(p.numel() for p in policy.parameters())
+    trainable_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
+    logging.info(
+        "Policy parameters: trainable=%d (%.2fM), total=%d (%.2fM), trainable_pct=%.2f%%",
+        trainable_params,
+        trainable_params / 1_000_000,
+        total_params,
+        total_params / 1_000_000,
+        100.0 * trainable_params / max(total_params, 1),
+    )
+
+
+def log_optimizer_state(optimizer: torch.optim.Optimizer, stage: str) -> None:
+    state_tensors = 0
+    state_elements = 0
+    for param_state in optimizer.state.values():
+        for value in param_state.values():
+            if isinstance(value, torch.Tensor):
+                state_tensors += 1
+                state_elements += value.numel()
+    logging.info(
+        "Optimizer state %s: entries=%d tensors=%d elements=%d (%.2fM)",
+        stage,
+        len(optimizer.state),
+        state_tensors,
+        state_elements,
+        state_elements / 1_000_000,
+    )
+
+
+def _set_gradient_checkpointing(module: torch.nn.Module, enabled: bool) -> None:
+    method_name = "gradient_checkpointing_enable" if enabled else "gradient_checkpointing_disable"
+    method = getattr(module, method_name, None)
+    if not callable(method):
+        return
+    try:
+        if enabled:
+            method(gradient_checkpointing_kwargs={"use_reentrant": False})
+        else:
+            method()
+    except TypeError:
+        method()
+
+
+def apply_runtime_training_flags(policy: SmolVLAPolicy, args: argparse.Namespace) -> None:
+    """Apply env/CLI finetuning flags even when the model was loaded from a checkpoint config."""
+    policy.config.freeze_vision_encoder = args.freeze_vision_encoder
+    policy.config.train_expert_only = args.train_expert_only
+    policy.config.gradient_checkpointing = args.gradient_checkpointing
+
+    flow_model = policy.model
+    flow_model.config.freeze_vision_encoder = args.freeze_vision_encoder
+    flow_model.config.train_expert_only = args.train_expert_only
+    flow_model.config.gradient_checkpointing = args.gradient_checkpointing
+    flow_model.config.train_state_proj = policy.config.train_state_proj
+
+    # Reset before reapplying SmolVLA's freezing rules. This lets a resumed run either
+    # freeze more of the model or intentionally unfreeze it.
+    for param in policy.parameters():
+        param.requires_grad = True
+
+    flow_model.vlm_with_expert.freeze_vision_encoder = args.freeze_vision_encoder
+    flow_model.vlm_with_expert.train_expert_only = args.train_expert_only
+    flow_model.vlm_with_expert.set_requires_grad()
+    flow_model.set_requires_grad()
+
+    for module in (flow_model.vlm_with_expert.vlm, flow_model.vlm_with_expert.lm_expert):
+        _set_gradient_checkpointing(module, args.gradient_checkpointing)
+
+    logging.info(
+        "Runtime training flags applied: freeze_vision_encoder=%s train_expert_only=%s gradient_checkpointing=%s",
+        args.freeze_vision_encoder,
+        args.train_expert_only,
+        args.gradient_checkpointing,
+    )
+
+
+def _cuda_synchronize_for_diagnostics(stage: str, device: torch.device) -> None:
+    if device.type != "cuda":
+        return
+    logging.info("%s: synchronizing CUDA stream...", stage)
+    torch.cuda.synchronize()
+    logging.info("%s: CUDA stream synchronized", stage)
+
+
+def _install_diagnostics(dump_interval_s: int) -> None:
+    try:
+        faulthandler.enable(all_threads=True)
+    except Exception as exc:
+        logging.warning("Could not enable faulthandler: %s", exc)
+
+    if dump_interval_s > 0:
+        try:
+            faulthandler.dump_traceback_later(dump_interval_s, repeat=True)
+            logging.info("Enabled faulthandler traceback dumps every %s seconds", dump_interval_s)
+        except Exception as exc:
+            logging.warning("Could not schedule faulthandler traceback dumps: %s", exc)
+
+    def _dump_on_signal(signum, _frame):
+        signame = signal.Signals(signum).name
+        logging.error("Received %s. Dumping Python stack traces before exit.", signame)
+        log_memory_usage(f"signal {signame}")
+        try:
+            faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+        finally:
+            raise SystemExit(128 + signum)
+
+    def _dump_without_exit(signum, _frame):
+        signame = signal.Signals(signum).name
+        logging.error("Received %s. Dumping Python stack traces.", signame)
+        faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(signum, _dump_on_signal)
+        except Exception as exc:
+            logging.debug("Could not install signal handler for %s: %s", signum, exc)
+
+    if hasattr(signal, "SIGUSR1"):
+        try:
+            signal.signal(signal.SIGUSR1, _dump_without_exit)
+        except Exception as exc:
+            logging.debug("Could not install SIGUSR1 handler: %s", exc)
+
+
 def free_checkpoint_space(output_dir: Path, required_space_gb: float = 10.0) -> None:
     import shutil
     try:
@@ -232,6 +365,9 @@ class HeartbeatMonitor(threading.Thread):
 
 
 def main() -> None:
+    import os
+    if "LEROBOT_VIDEO_DECODER_CACHE_SIZE" not in os.environ:
+        os.environ["LEROBOT_VIDEO_DECODER_CACHE_SIZE"] = "500"
     import sys
     try:
         sys.stdout.reconfigure(line_buffering=True)
@@ -245,6 +381,7 @@ def main() -> None:
             "Use --no-push-to-hub to disable pushing to the Hugging Face Hub."
         )
     init_logging(console_level="INFO", file_level="DEBUG")
+    _install_diagnostics(args.diagnostic_dump_interval)
     start_time = time.time()
 
     logging.info("Starting SmolVLA digit training")
@@ -310,8 +447,8 @@ def main() -> None:
         input_features=input_features,
         output_features=output_features,
         load_vlm_weights=True,
-        freeze_vision_encoder=False,
-        train_expert_only=False,
+        freeze_vision_encoder=args.freeze_vision_encoder,
+        train_expert_only=args.train_expert_only,
         digit_alignment_loss_weight=0.25,
         digit_classification_loss_weight=1.0,
         gradient_checkpointing=args.gradient_checkpointing,
@@ -322,9 +459,11 @@ def main() -> None:
         policy = SmolVLAPolicy.from_pretrained(checkpoint_dir)
     else:
         policy = SmolVLAPolicy(config)
+    apply_runtime_training_flags(policy, args)
     policy.train()
     policy.to(device)
     logging.info("Policy initialized on %s", device)
+    log_trainable_parameters(policy)
 
     preprocessor, postprocessor = make_smolvla_pre_post_processors(
         config,
@@ -395,11 +534,23 @@ def main() -> None:
         digit_bank = None
         logging.info("MNIST dataset is disabled. No auxiliary MNIST reference images will be used.")
 
-    optimizer = config.get_optimizer_preset().build(policy.parameters())
+    trainable_params = [param for param in policy.parameters() if param.requires_grad]
+    if not trainable_params:
+        raise RuntimeError("No trainable parameters found after applying training flags.")
+    optimizer = policy.config.get_optimizer_preset().build(trainable_params)
     logging.info("Optimizer initialized: %s", optimizer.__class__.__name__)
     if checkpoint_dir is not None and (checkpoint_dir / "optimizer.bin").exists():
         logging.info("Loading optimizer state from checkpoint: %s", checkpoint_dir / "optimizer.bin")
-        optimizer.load_state_dict(torch.load(checkpoint_dir / "optimizer.bin", map_location=device))
+        try:
+            optimizer.load_state_dict(torch.load(checkpoint_dir / "optimizer.bin", map_location=device))
+            log_optimizer_state(optimizer, "after checkpoint load")
+        except ValueError as exc:
+            logging.warning(
+                "Skipping optimizer state from %s because it does not match the current trainable parameter set: %s",
+                checkpoint_dir / "optimizer.bin",
+                exc,
+            )
+            logging.warning("Continuing with a fresh optimizer state for the resumed model weights.")
     step = start_step
     # Load target drawings for all episodes into RAM (Approach B)
     logging.info("Loading target drawings for all episodes into RAM...")
@@ -424,8 +575,12 @@ def main() -> None:
     dataloader_iter = iter(dataloader)
 
     # Start Heartbeat Monitor for hang detection
-    monitor = HeartbeatMonitor(timeout=300) # 5 minutes timeout
+    monitor = HeartbeatMonitor(timeout=args.heartbeat_timeout)
     monitor.start()
+
+    accumulated_batches = 0
+    accumulated_losses = {}
+    accum_steps = args.gradient_accumulation_steps
 
     try:
         while step < args.steps:
@@ -483,136 +638,191 @@ def main() -> None:
                 from contextlib import nullcontext
                 autocast_ctx = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16) if (args.use_amp and device.type == "cuda") else nullcontext()
 
-                logging.info("Batch %s starting forward pass...", step + 1)
+                logging.info(
+                    "Batch %s (micro-step %d/%d) starting forward pass...",
+                    step + 1,
+                    accumulated_batches + 1,
+                    accum_steps,
+                )
                 forward_start = time.time()
                 with autocast_ctx:
                     loss, loss_dict = policy.forward(processed_batch)
-                logging.info("Batch %s forward pass completed in %.2fs", step + 1, time.time() - forward_start)
+                logging.info(
+                    "Batch %s (micro-step %d/%d) forward pass completed in %.2fs",
+                    step + 1,
+                    accumulated_batches + 1,
+                    accum_steps,
+                    time.time() - forward_start,
+                )
 
-                log_memory_usage(f"Batch {step + 1} before backward")
-                logging.info("Batch %s starting backward pass...", step + 1)
+                # Scale the loss for gradient accumulation
+                loss_scaled = loss / accum_steps
+
+                log_memory_usage(f"Batch {step + 1} (micro-step {accumulated_batches + 1}/{accum_steps}) before backward")
+                _cuda_synchronize_for_diagnostics(
+                    f"Batch {step + 1} (micro-step {accumulated_batches + 1}/{accum_steps}) before backward",
+                    device,
+                )
+                logging.info(
+                    "Batch %s (micro-step %d/%d) starting backward pass...",
+                    step + 1,
+                    accumulated_batches + 1,
+                    accum_steps,
+                )
                 backward_start = time.time()
-                loss.backward()
-                logging.info("Batch %s backward pass completed in %.2fs", step + 1, time.time() - backward_start)
-
-                log_memory_usage(f"Batch {step + 1} after backward")
-                logging.info("Batch %s starting optimizer step...", step + 1)
-                optim_start = time.time()
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
-                logging.info("Batch %s optimizer step completed in %.2fs", step + 1, time.time() - optim_start)
-                log_memory_usage(f"Batch {step + 1} after optimizer")
-
-                if step % args.log_freq == 0:
-                    now = time.time()
-                    logging.info(
-                        "Step %s/%s (%.1fs elapsed, %.1fs since last log)",
-                        step,
-                        args.steps,
-                        now - start_time,
-                        now - last_log_time,
+                try:
+                    loss_scaled.backward()
+                    _cuda_synchronize_for_diagnostics(
+                        f"Batch {step + 1} (micro-step {accumulated_batches + 1}/{accum_steps}) after backward",
+                        device,
                     )
-                    print(json.dumps({"step": step, **loss_dict}, sort_keys=True), flush=True)
-                    last_log_time = now
+                except BaseException:
+                    logging.exception(
+                        "Backward failed or was interrupted at batch %s (micro-step %d/%d)",
+                        step + 1,
+                        accumulated_batches + 1,
+                        accum_steps,
+                    )
+                    log_memory_usage(f"Batch {step + 1} backward failure")
+                    raise
+                logging.info(
+                    "Batch %s (micro-step %d/%d) backward pass completed in %.2fs",
+                    step + 1,
+                    accumulated_batches + 1,
+                    accum_steps,
+                    time.time() - backward_start,
+                )
 
-                if step > start_step and step % args.save_freq == 0:
-                    checkpoint_dir = output_dir / f"checkpoint-{step}"
-                    tmp_checkpoint_dir = output_dir / f".checkpoint-{step}.tmp"
+                # Accumulate stats for logging
+                accumulated_batches += 1
+                for k, v in loss_dict.items():
+                    accumulated_losses[k] = accumulated_losses.get(k, 0.0) + (v / accum_steps)
 
-                    def _do_save():
-                        logging.info("Saving checkpoint to %s", checkpoint_dir)
-                        log_memory_usage("Start checkpoint saving")
-                        if tmp_checkpoint_dir.exists():
-                            import shutil
-                            shutil.rmtree(tmp_checkpoint_dir)
-                        tmp_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+                # Only perform optimizer step and checkpointing/logging after collecting enough gradients
+                if accumulated_batches >= accum_steps:
+                    log_memory_usage(f"Batch {step + 1} after backward")
+                    logging.info("Batch %s starting optimizer step...", step + 1)
+                    optim_start = time.time()
+                    optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
+                    logging.info("Batch %s optimizer step completed in %.2fs", step + 1, time.time() - optim_start)
+                    log_memory_usage(f"Batch {step + 1} after optimizer")
 
-                        # Move policy to CPU and clear CUDA cache to prevent GPU/VRAM OOM
-                        logging.info("Moving policy to CPU...")
-                        policy.to("cpu")
-                        torch.cuda.empty_cache()
-                        log_memory_usage("After moving policy to CPU")
+                    if step % args.log_freq == 0:
+                        now = time.time()
+                        logging.info(
+                            "Step %s/%s (%.1fs elapsed, %.1fs since last log)",
+                            step,
+                            args.steps,
+                            now - start_time,
+                            now - last_log_time,
+                        )
+                        print(json.dumps({"step": step, **accumulated_losses}, sort_keys=True), flush=True)
+                        last_log_time = now
 
-                        logging.info("Saving policy weights...")
-                        policy.save_pretrained(tmp_checkpoint_dir)
-                        log_memory_usage("After saving policy weights")
+                    # Reset accumulation states
+                    accumulated_batches = 0
+                    accumulated_losses = {}
 
-                        logging.info("Saving preprocessor and postprocessor configs...")
-                        preprocessor.save_pretrained(tmp_checkpoint_dir)
-                        postprocessor.save_pretrained(tmp_checkpoint_dir)
+                    if step > start_step and step % args.save_freq == 0:
+                        checkpoint_dir = output_dir / f"checkpoint-{step}"
+                        tmp_checkpoint_dir = output_dir / f".checkpoint-{step}.tmp"
 
-                        # Move optimizer state dict to CPU before saving to prevent OOM
-                        logging.info("Extracting optimizer state dict...")
-                        opt_state_dict = optimizer.state_dict()
-                        log_memory_usage("After opt_state_dict extraction")
-
-                        logging.info("Deepcopying and offloading optimizer state dict to CPU...")
-                        import copy
-                        opt_state_dict_cpu = copy.deepcopy(opt_state_dict)
-                        for param_id, param_state in opt_state_dict_cpu.get("state", {}).items():
-                            for k, v in param_state.items():
-                                if isinstance(v, torch.Tensor):
-                                    param_state[k] = v.cpu()
-                        log_memory_usage("After converting optimizer to CPU")
-
-                        logging.info("Saving optimizer state dict to disk...")
-                        torch.save(opt_state_dict_cpu, tmp_checkpoint_dir / "optimizer.bin")
-                        del opt_state_dict, opt_state_dict_cpu
-                        log_memory_usage("After saving optimizer state")
-
-                        # Restore policy to original device
-                        logging.info("Moving policy back to original device (%s)...", device)
-                        policy.to(device)
-                        torch.cuda.empty_cache()
-                        log_memory_usage("After restoring policy to device")
-
-                        # Atomic rename
-                        logging.info("Renaming temporary checkpoint directory to %s", checkpoint_dir)
-                        if checkpoint_dir.exists():
-                            import shutil
-                            shutil.rmtree(checkpoint_dir)
-                        tmp_checkpoint_dir.rename(checkpoint_dir)
-                        logging.info("Checkpoint saved successfully at step %d", step)
-
-                    try:
-                        free_checkpoint_space(output_dir, required_space_gb=10.0)
-                        _do_save()
-                    except OSError as e:
-                        # Clean up the temporary (youngest/latest) checkpoint to free space
-                        if tmp_checkpoint_dir.exists():
-                            logging.warning("[Disk Error] Write failed. Deleting temporary/incomplete checkpoint directory %s...", tmp_checkpoint_dir)
-                            import shutil
-                            try:
-                                shutil.rmtree(tmp_checkpoint_dir)
-                            except Exception as clean_err:
-                                logging.error("Failed to delete tmp directory: %s", clean_err)
-
-                        # Delete the oldest checkpoint to make more space
-                        logging.error("[Disk Error] Saving checkpoint failed due to write/disk space error: %s. Attempting recovery...", e)
-                        free_checkpoint_space(output_dir, required_space_gb=15.0)
-
-                        # Retry once
-                        try:
-                            logging.info("[Disk Recovery] Retrying checkpoint save after cleaning older checkpoints...")
-                            _do_save()
-                            logging.info("[Disk Recovery] Checkpoint saved successfully on retry.")
-                        except Exception as retry_err:
-                            logging.error("[Disk Recovery] Checkpoint saving failed even after cleanup: %s", retry_err)
+                        def _do_save():
+                            logging.info("Saving checkpoint to %s", checkpoint_dir)
+                            log_memory_usage("Start checkpoint saving")
                             if tmp_checkpoint_dir.exists():
+                                import shutil
+                                shutil.rmtree(tmp_checkpoint_dir)
+                            tmp_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+                            # Move policy to CPU and clear CUDA cache to prevent GPU/VRAM OOM
+                            logging.info("Moving policy to CPU...")
+                            policy.to("cpu")
+                            torch.cuda.empty_cache()
+                            log_memory_usage("After moving policy to CPU")
+
+                            logging.info("Saving policy weights...")
+                            policy.save_pretrained(tmp_checkpoint_dir)
+                            log_memory_usage("After saving policy weights")
+
+                            logging.info("Saving preprocessor and postprocessor configs...")
+                            preprocessor.save_pretrained(tmp_checkpoint_dir)
+                            postprocessor.save_pretrained(tmp_checkpoint_dir)
+
+                            # Move optimizer state dict to CPU before saving to prevent OOM
+                            logging.info("Extracting optimizer state dict...")
+                            opt_state_dict = optimizer.state_dict()
+                            log_memory_usage("After opt_state_dict extraction")
+
+                            logging.info("Deepcopying and offloading optimizer state dict to CPU...")
+                            import copy
+                            opt_state_dict_cpu = copy.deepcopy(opt_state_dict)
+                            for param_id, param_state in opt_state_dict_cpu.get("state", {}).items():
+                                for k, v in param_state.items():
+                                    if isinstance(v, torch.Tensor):
+                                        param_state[k] = v.cpu()
+                            log_memory_usage("After converting optimizer to CPU")
+
+                            logging.info("Saving optimizer state dict to disk...")
+                            torch.save(opt_state_dict_cpu, tmp_checkpoint_dir / "optimizer.bin")
+                            del opt_state_dict, opt_state_dict_cpu
+                            log_memory_usage("After saving optimizer state")
+
+                            # Restore policy to original device
+                            logging.info("Moving policy back to original device (%s)...", device)
+                            policy.to(device)
+                            torch.cuda.empty_cache()
+                            log_memory_usage("After restoring policy to device")
+
+                            # Atomic rename
+                            logging.info("Renaming temporary checkpoint directory to %s", checkpoint_dir)
+                            if checkpoint_dir.exists():
+                                import shutil
+                                shutil.rmtree(checkpoint_dir)
+                            tmp_checkpoint_dir.rename(checkpoint_dir)
+                            logging.info("Checkpoint saved successfully at step %d", step)
+
+                        try:
+                            free_checkpoint_space(output_dir, required_space_gb=10.0)
+                            _do_save()
+                        except OSError as e:
+                            # Clean up the temporary (youngest/latest) checkpoint to free space
+                            if tmp_checkpoint_dir.exists():
+                                logging.warning("[Disk Error] Write failed. Deleting temporary/incomplete checkpoint directory %s...", tmp_checkpoint_dir)
                                 import shutil
                                 try:
                                     shutil.rmtree(tmp_checkpoint_dir)
+                                except Exception as clean_err:
+                                    logging.error("Failed to delete tmp directory: %s", clean_err)
+
+                            # Delete the oldest checkpoint to make more space
+                            logging.error("[Disk Error] Saving checkpoint failed due to write/disk space error: %s. Attempting recovery...", e)
+                            free_checkpoint_space(output_dir, required_space_gb=15.0)
+
+                            # Retry once
+                            try:
+                                logging.info("[Disk Recovery] Retrying checkpoint save after cleaning older checkpoints...")
+                                _do_save()
+                                logging.info("[Disk Recovery] Checkpoint saved successfully on retry.")
+                            except Exception as retry_err:
+                                logging.error("[Disk Recovery] Checkpoint saving failed even after cleanup: %s", retry_err)
+                                if tmp_checkpoint_dir.exists():
+                                    import shutil
+                                    try:
+                                        shutil.rmtree(tmp_checkpoint_dir)
+                                    except Exception:
+                                        pass
+                                try:
+                                    policy.to(device)
+                                    torch.cuda.empty_cache()
                                 except Exception:
                                     pass
-                            try:
-                                policy.to(device)
-                                torch.cuda.empty_cache()
-                            except Exception:
-                                pass
 
-                step += 1
-                if step >= args.steps:
-                    break
+                if accumulated_batches == 0:
+                    step += 1
+                    if step >= args.steps:
+                        break
             except Exception:
                 logging.exception("Training step failed at global step %s", step)
                 raise

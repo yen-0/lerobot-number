@@ -12,15 +12,16 @@ set -euo pipefail
 PBS_O_WORKDIR="${PBS_O_WORKDIR:-$(pwd)}"
 cd "${PBS_O_WORKDIR}"
 
-# 2. Source local job configuration.
-if [[ ! -f config.env ]]; then
-  echo "Missing config.env in ${PWD}" >&2
-  exit 1
+# 2. Source optional local secrets first, then tracked non-secret config.
+if [[ -f config.env ]]; then
+  source config.env
 fi
-source config.env
+if [[ -f config.shared.env ]]; then
+  source config.shared.env
+fi
 
 if [[ -z "${HF_TOKEN:-}" || "${HF_TOKEN}" == "hf_YOUR_TOKEN_HERE" ]]; then
-  echo "[WARNING] HF_TOKEN is not set or is still the placeholder in config.env!" >&2
+  echo "[WARNING] HF_TOKEN is not set. Put it in ignored config.env if this job needs private Hub access." >&2
 else
   echo "[INFO] HF_TOKEN loaded successfully (starts with: ${HF_TOKEN:0:8}...)"
 fi

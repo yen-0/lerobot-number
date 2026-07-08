@@ -1,9 +1,13 @@
 # scripts/extract_patterns.ps1
 
-# Load config.env if it exists
-if (Test-Path "config.env") {
-    Get-Content "config.env" | Where-Object { $_ -notmatch "^#" -and $_ -match "=" } | ForEach-Object {
-        $name, $value = $_.Split('=', 2)
+# Load optional local secrets first, then tracked non-secret config.
+foreach ($configFile in @("config.env", "config.shared.env")) {
+    if (-not (Test-Path $configFile)) {
+        continue
+    }
+    Get-Content $configFile | Where-Object { $_ -notmatch "^#" -and $_ -match "=" } | ForEach-Object {
+        $line = $_ -replace "^\s*export\s+", ""
+        $name, $value = $line.Split('=', 2)
         [System.Environment]::SetEnvironmentVariable($name.Trim(), $value.Trim())
     }
 }

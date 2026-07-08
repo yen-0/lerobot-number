@@ -4,9 +4,12 @@ set -euo pipefail
 # Move to the directory where the script is run
 cd "${PBS_O_WORKDIR:-$(pwd)}"
 
-# Source config.env if it exists
+# Source optional local secrets first, then tracked non-secret config.
 if [[ -f config.env ]]; then
   source config.env
+fi
+if [[ -f config.shared.env ]]; then
+  source config.shared.env
 fi
 
 if [[ -n "${HF_TOKEN:-}" ]]; then

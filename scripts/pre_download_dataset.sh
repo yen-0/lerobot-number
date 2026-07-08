@@ -5,17 +5,13 @@ set -euo pipefail
 # 1. Move to the workspace directory
 cd "$(dirname "$0")/.."
 
-# 2. Source configuration
-if [[ ! -f config.env ]]; then
-  if [[ -f config.env.example ]]; then
-    echo "[$(date -Is)] creating config.env from config.env.example..."
-    cp config.env.example config.env
-  else
-    echo "[$(date -Is)] Error: Missing config.env" >&2
-    exit 1
-  fi
+# 2. Source optional local secrets first, then tracked non-secret config.
+if [[ -f config.env ]]; then
+  source config.env
 fi
-source config.env
+if [[ -f config.shared.env ]]; then
+  source config.shared.env
+fi
 
 # 3. Prepare cache directories
 mkdir -p "${HF_HOME}"

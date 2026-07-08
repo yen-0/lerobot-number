@@ -1,0 +1,117 @@
+#!/bin/bash
+#PBS -N resource_stress
+#PBS -q regular-g
+#PBS -W group_list=gw13
+#PBS -l select=1:ncpus=16:mem=60gb
+#PBS -l walltime=02:00:00
+#PBS -j oe
+
+set -euo pipefail
+
+PBS_O_WORKDIR="${PBS_O_WORKDIR:-$(pwd)}"
+cd "${PBS_O_WORKDIR}"
+
+if [[ -f config.env ]]; then
+  source config.env
+fi
+if [[ -f config.shared.env ]]; then
+  source config.shared.env
+fi
+
+if [[ -d "/work/gw13/w13009" ]]; then
+  SHARED_CACHE_BASE="/work/gw13/w13009/.cache"
+else
+  SHARED_CACHE_BASE="$HOME/.cache"
+fi
+
+if [[ -n "${TMPDIR:-}" ]]; then
+  LOCAL_CACHE="${TMPDIR}/.cache"
+else
+  LOCAL_CACHE="/tmp/$(whoami)/.cache"
+fi
+
+mkdir -p "${LOCAL_CACHE}/huggingface" "${LOCAL_CACHE}/lerobot" "${LOCAL_CACHE}/torch" "${LOCAL_CACHE}/triton"
+
+export HF_HOME=$LOCAL_CACHE/huggingface
+export HF_LEROBOT_HOME=$LOCAL_CACHE/lerobot
+export HF_DATASETS_CACHE=$LOCAL_CACHE/huggingface/datasets
+export TORCH_HOME=$LOCAL_CACHE/torch
+export TRITON_CACHE_DIR=$LOCAL_CACHE/triton
+export PYTHONPATH=${PYTHONPATH:-}:$(pwd)/src
+export PYTHONUNBUFFERED=1
+
+export APPTAINERENV_HF_HOME=$HF_HOME
+export APPTAINERENV_HF_LEROBOT_HOME=$HF_LEROBOT_HOME
+export APPTAINERENV_HF_DATASETS_CACHE=$HF_DATASETS_CACHE
+export APPTAINERENV_TORCH_HOME=$TORCH_HOME
+export APPTAINERENV_TRITON_CACHE_DIR=$TRITON_CACHE_DIR
+export APPTAINERENV_PYTHONPATH=$PYTHONPATH
+export APPTAINERENV_PYTHONUNBUFFERED=1
+export APPTAINERENV_PBS_O_WORKDIR="${PBS_O_WORKDIR}"
+
+if [[ -n "${HF_TOKEN:-}" ]]; then
+  export APPTAINERENV_HF_TOKEN="$HF_TOKEN"
+fi
+
+module load "${APPTAINER_MODULE}"
+
+LOG_DIR="${PBS_O_WORKDIR}/logs"
+mkdir -p "${LOG_DIR}"
+LOG_FILE="${LOG_DIR}/resource_stress_${PBS_JOBID:-manual}_$(date +%Y%m%d_%H%M%S).log"
+
+STRESS_OUTPUT_DIR="${STRESS_OUTPUT_DIR:-./outputs/resource_stress}"
+STRESS_JSONL="${STRESS_JSONL:-${STRESS_OUTPUT_DIR}/stress_results_${PBS_JOBID:-manual}.jsonl}"
+
+ARGS=(
+  --output-dir="${STRESS_OUTPUT_DIR}"
+  --disk-test-gb="${STRESS_DISK_TEST_GB:-20}"
+  --disk-chunk-mb="${STRESS_DISK_CHUNK_MB:-64}"
+  --min-free-gb="${STRESS_MIN_FREE_GB:-20}"
+  --progress-every-gb="${STRESS_PROGRESS_EVERY_GB:-1}"
+  --read-passes="${STRESS_READ_PASSES:-1}"
+  --small-files="${STRESS_SMALL_FILES:-1000}"
+  --small-file-kb="${STRESS_SMALL_FILE_KB:-64}"
+  --memory-test-gb="${STRESS_MEMORY_TEST_GB:-32}"
+  --memory-chunk-mb="${STRESS_MEMORY_CHUNK_MB:-512}"
+  --memory-hold-seconds="${STRESS_MEMORY_HOLD_SECONDS:-30}"
+  --gpu-memory-test-gb="${STRESS_GPU_MEMORY_TEST_GB:-0}"
+  --gpu-memory-chunk-mb="${STRESS_GPU_MEMORY_CHUNK_MB:-512}"
+  --jsonl="${STRESS_JSONL}"
+)
+
+if [[ "${STRESS_KEEP_FILE:-false}" == "true" ]]; then
+  ARGS+=(--keep-file)
+else
+  ARGS+=(--no-keep-file)
+fi
+
+if [[ "${STRESS_FSYNC:-true}" == "true" ]]; then
+  ARGS+=(--fsync)
+else
+  ARGS+=(--no-fsync)
+fi
+
+echo "[$(date -Is)] starting cluster resource stress test"
+echo "[$(date -Is)] log file: ${LOG_FILE}"
+echo "[$(date -Is)] apptainer image: ${APPTAINER_IMAGE}"
+echo "[$(date -Is)] args: ${ARGS[*]}"
+
+BINDS=(
+  --bind "${PBS_O_WORKDIR}:${PBS_O_WORKDIR}:rw"
+  --bind "$HOME:$HOME:rw"
+)
+
+if [[ -d "/work/gw13" ]]; then
+  BINDS+=(--bind "/work/gw13:/work/gw13:rw")
+fi
+
+if [[ "${LOCAL_CACHE}" != "$HOME/.cache" ]]; then
+  BINDS+=(--bind "${LOCAL_CACHE}:${LOCAL_CACHE}:rw")
+fi
+
+apptainer exec --nv \
+  "${BINDS[@]}" \
+  --writable-tmpfs \
+  --pwd "${PBS_O_WORKDIR}" \
+  "${APPTAINER_IMAGE}" \
+  python -u scripts/stress_cluster_resources.py "${ARGS[@]}" 2>&1 | tee -a "${LOG_FILE}"

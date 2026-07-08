@@ -12,31 +12,45 @@ set -euo pipefail
 PBS_O_WORKDIR="${PBS_O_WORKDIR:-$(pwd)}"
 cd "${PBS_O_WORKDIR}"
 
-# 2. Source local job configuration.
-if [[ ! -f config.env ]]; then
-  echo "Missing config.env in ${PWD}" >&2
-  exit 1
+# 2. Source optional local secrets first, then tracked non-secret config.
+if [[ -f config.env ]]; then
+  source config.env
 fi
-source config.env
+if [[ -f config.shared.env ]]; then
+  source config.shared.env
+fi
 
 if [[ -z "${HF_TOKEN:-}" || "${HF_TOKEN}" == "hf_YOUR_TOKEN_HERE" ]]; then
-  echo "[WARNING] HF_TOKEN is not set or is still the placeholder in config.env!" >&2
+  echo "[WARNING] HF_TOKEN is not set. Put it in ignored config.env if this job needs private Hub access." >&2
 else
   echo "[INFO] HF_TOKEN loaded successfully (starts with: ${HF_TOKEN:0:8}...)"
 fi
 
-# 3. Prepare cache directories on the shared filesystem.
+# 3. Prepare cache directories. We copy/sync the cache from shared storage to node-local SSD (if available) to maximize I/O performance.
 if [[ -d "/work/gw13/w13009" ]]; then
-  CACHE_BASE="/work/gw13/w13009/.cache"
+  SHARED_CACHE_BASE="/work/gw13/w13009/.cache"
 else
-  CACHE_BASE="$HOME/.cache"
+  SHARED_CACHE_BASE="$HOME/.cache"
 fi
 
-mkdir -p "$CACHE_BASE/huggingface"
-mkdir -p "$CACHE_BASE/huggingface/datasets"
-mkdir -p "$CACHE_BASE/lerobot"
-mkdir -p "$CACHE_BASE/torch"
-mkdir -p "$CACHE_BASE/triton"
+if [[ -n "${TMPDIR:-}" ]]; then
+  LOCAL_CACHE="${TMPDIR}/.cache"
+else
+  LOCAL_CACHE="/tmp/$(whoami)/.cache"
+fi
+
+echo "[$(date -Is)] Preparing local node high-speed cache at: ${LOCAL_CACHE}"
+mkdir -p "${LOCAL_CACHE}/huggingface"
+mkdir -p "${LOCAL_CACHE}/lerobot"
+mkdir -p "${LOCAL_CACHE}/torch"
+mkdir -p "${LOCAL_CACHE}/triton"
+
+if [[ -d "${SHARED_CACHE_BASE}/huggingface" ]]; then
+  echo "[$(date -Is)] Syncing shared HF cache to local compute node storage..."
+  rsync -a --exclude='*.lock' "${SHARED_CACHE_BASE}/huggingface/" "${LOCAL_CACHE}/huggingface/"
+fi
+
+CACHE_BASE="${LOCAL_CACHE}"
 
 # 4. Export runtime variables for the host shell and Apptainer.
 export HF_HOME=$CACHE_BASE/huggingface
@@ -75,8 +89,29 @@ ARGS=(
   --num_workers="${NUM_WORKERS:-4}"
   --mnist_examples_per_digit="${MNIST_EXAMPLES_PER_DIGIT:-64}"
   --save_freq="${SAVE_FREQ:-5000}"
+  --heartbeat_timeout="${HEARTBEAT_TIMEOUT:-300}"
+  --diagnostic_dump_interval="${DIAGNOSTIC_DUMP_INTERVAL:-300}"
   --resume
+  --gradient_accumulation_steps="${GRADIENT_ACCUMULATION_STEPS:-1}"
 )
+
+if [[ "${FREEZE_VISION_ENCODER:-false}" == "true" ]]; then
+  ARGS+=(--policy.freeze_vision_encoder)
+else
+  ARGS+=(--no-policy.freeze_vision_encoder)
+fi
+
+if [[ "${TRAIN_EXPERT_ONLY:-false}" == "true" ]]; then
+  ARGS+=(--policy.train_expert_only)
+else
+  ARGS+=(--no-policy.train_expert_only)
+fi
+
+if [[ "${GRADIENT_CHECKPOINTING:-true}" == "true" ]]; then
+  ARGS+=(--policy.gradient_checkpointing)
+else
+  ARGS+=(--no-policy.gradient_checkpointing)
+fi
 
 if [[ "${USE_MNIST:-false}" == "true" ]]; then
   ARGS+=(--use-mnist)
@@ -122,6 +157,17 @@ fi
 if [[ "${CACHE_BASE}" != "$HOME/.cache" ]]; then
   BINDS+=(--bind "${CACHE_BASE}:${CACHE_BASE}:rw")
 fi
+
+cleanup() {
+  status=$?
+  echo "[$(date -Is)] smolvla digits job exiting with status ${status}"
+  if [[ -d "${LOCAL_CACHE}/huggingface" && -n "${SHARED_CACHE_BASE:-}" ]]; then
+    echo "[$(date -Is)] Syncing local HF cache back to shared storage..."
+    mkdir -p "${SHARED_CACHE_BASE}/huggingface"
+    rsync -a --exclude='*.lock' "${LOCAL_CACHE}/huggingface/" "${SHARED_CACHE_BASE}/huggingface/"
+  fi
+}
+trap cleanup EXIT
 
 apptainer --debug exec --nv \
   "${BINDS[@]}" \

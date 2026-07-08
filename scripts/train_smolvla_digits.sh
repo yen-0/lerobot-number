@@ -3,9 +3,12 @@ set -euo pipefail
 
 cd "${PBS_O_WORKDIR:-$(pwd)}"
 
-# Source config.env if it exists
+# Source optional local secrets first, then tracked non-secret config.
 if [[ -f config.env ]]; then
   source config.env
+fi
+if [[ -f config.shared.env ]]; then
+  source config.shared.env
 fi
 
 if [[ -n "${HF_TOKEN:-}" ]]; then
@@ -25,6 +28,12 @@ USE_MNIST="${USE_MNIST:-false}"
 DIGIT_MAP="${DIGIT_MAP:-}"
 POLICY_REPO_ID="${POLICY_REPO_ID:-}"
 PUSH_TO_HUB="${PUSH_TO_HUB:-true}"
+FREEZE_VISION_ENCODER="${FREEZE_VISION_ENCODER:-false}"
+TRAIN_EXPERT_ONLY="${TRAIN_EXPERT_ONLY:-false}"
+GRADIENT_CHECKPOINTING="${GRADIENT_CHECKPOINTING:-true}"
+GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
+HEARTBEAT_TIMEOUT="${HEARTBEAT_TIMEOUT:-300}"
+DIAGNOSTIC_DUMP_INTERVAL="${DIAGNOSTIC_DUMP_INTERVAL:-0}"
 
 ARGS=(
   --dataset.repo_id "${DATASET_REPO_ID}"
@@ -35,7 +44,28 @@ ARGS=(
   --batch_size "${BATCH_SIZE}"
   --num_workers "${NUM_WORKERS}"
   --mnist_examples_per_digit "${MNIST_EXAMPLES_PER_DIGIT}"
+  --gradient_accumulation_steps "${GRADIENT_ACCUMULATION_STEPS}"
+  --heartbeat_timeout "${HEARTBEAT_TIMEOUT}"
+  --diagnostic_dump_interval "${DIAGNOSTIC_DUMP_INTERVAL}"
 )
+
+if [[ "${FREEZE_VISION_ENCODER}" == "true" ]]; then
+  ARGS+=(--policy.freeze_vision_encoder)
+else
+  ARGS+=(--no-policy.freeze_vision_encoder)
+fi
+
+if [[ "${TRAIN_EXPERT_ONLY}" == "true" ]]; then
+  ARGS+=(--policy.train_expert_only)
+else
+  ARGS+=(--no-policy.train_expert_only)
+fi
+
+if [[ "${GRADIENT_CHECKPOINTING}" == "true" ]]; then
+  ARGS+=(--policy.gradient_checkpointing)
+else
+  ARGS+=(--no-policy.gradient_checkpointing)
+fi
 
 if [[ "${USE_MNIST}" == "true" ]]; then
   ARGS+=(--use-mnist)
