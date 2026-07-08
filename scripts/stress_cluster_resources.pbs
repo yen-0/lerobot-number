@@ -95,6 +95,14 @@ echo "[$(date -Is)] starting cluster resource stress test"
 echo "[$(date -Is)] log file: ${LOG_FILE}"
 echo "[$(date -Is)] apptainer image: ${APPTAINER_IMAGE}"
 echo "[$(date -Is)] args: ${ARGS[*]}"
+echo "[$(date -Is)] storage context:"
+df -h "${PBS_O_WORKDIR}" || true
+df -i "${PBS_O_WORKDIR}" || true
+if command -v lfs >/dev/null 2>&1; then
+  lfs quota -h -u "$(whoami)" "${PBS_O_WORKDIR}" || true
+  lfs quota -h -g "$(id -gn)" "${PBS_O_WORKDIR}" || true
+fi
+quota -s 2>/dev/null || true
 
 BINDS=(
   --bind "${PBS_O_WORKDIR}:${PBS_O_WORKDIR}:rw"

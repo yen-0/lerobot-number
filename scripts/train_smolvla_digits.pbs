@@ -69,6 +69,9 @@ export APPTAINERENV_TORCH_HOME=$TORCH_HOME
 export APPTAINERENV_TRITON_CACHE_DIR=$TRITON_CACHE_DIR
 export APPTAINERENV_PYTHONPATH=$PYTHONPATH
 export APPTAINERENV_PYTHONUNBUFFERED=1
+export APPTAINERENV_PYTHONFAULTHANDLER="${PYTHONFAULTHANDLER:-1}"
+export APPTAINERENV_TORCH_SHOW_CPP_STACKTRACES="${TORCH_SHOW_CPP_STACKTRACES:-1}"
+export APPTAINERENV_CUDA_LAUNCH_BLOCKING="${CUDA_LAUNCH_BLOCKING:-0}"
 export APPTAINERENV_LEROBOT_LOG_VIDEO_TIMESTAMPS=0
 export APPTAINERENV_PBS_O_WORKDIR="${PBS_O_WORKDIR:-$(pwd)}"
 
@@ -143,6 +146,14 @@ echo "[$(date -Is)] starting smolvla digits job"
 echo "[$(date -Is)] log file: ${LOG_FILE}"
 echo "[$(date -Is)] apptainer image: ${APPTAINER_IMAGE}"
 echo "[$(date -Is)] args: ${ARGS[*]}"
+echo "[$(date -Is)] storage context:"
+df -h "${PBS_O_WORKDIR}" || true
+df -i "${PBS_O_WORKDIR}" || true
+if command -v lfs >/dev/null 2>&1; then
+  lfs quota -h -u "$(whoami)" "${PBS_O_WORKDIR}" || true
+  lfs quota -h -g "$(id -gn)" "${PBS_O_WORKDIR}" || true
+fi
+quota -s 2>/dev/null || true
 
 # 6. Run training inside the GPU container with explicit write permissions
 BINDS=(

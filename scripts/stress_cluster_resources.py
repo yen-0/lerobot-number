@@ -393,6 +393,9 @@ def main() -> None:
     context_records = [
         {"test": "command_context", **command_context(["df", "-h", str(output_dir)])},
         {"test": "command_context", **command_context(["df", "-i", str(output_dir)])},
+        {"test": "command_context", **command_context(["bash", "-lc", f"command -v lfs >/dev/null && lfs quota -h -u $(whoami) {output_dir} || true"])},
+        {"test": "command_context", **command_context(["bash", "-lc", f"command -v lfs >/dev/null && lfs quota -h -g $(id -gn) {output_dir} || true"])},
+        {"test": "command_context", **command_context(["bash", "-lc", "quota -s 2>/dev/null || true"])},
         {"test": "command_context", **command_context(["mount"])},
         {"test": "command_context", **command_context(["bash", "-lc", "ulimit -a"])},
     ]
