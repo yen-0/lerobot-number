@@ -70,6 +70,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--push_to_hub", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--streaming", action="store_true", help="Stream the dataset from Hub instead of caching it locally")
     parser.add_argument("--resume", action="store_true", help="Auto-resume from the latest checkpoint in output_dir if it exists")
+    parser.add_argument("--policy.gradient_checkpointing", dest="gradient_checkpointing", action=argparse.BooleanOptionalAction, default=True, help="Enable gradient checkpointing to reduce VRAM usage")
+    parser.add_argument("--use-amp", dest="use_amp", action=argparse.BooleanOptionalAction, default=True, help="Whether to use Automatic Mixed Precision (AMP) for training")
     return parser.parse_args()
 
 
@@ -222,6 +224,7 @@ def main() -> None:
         train_expert_only=False,
         digit_alignment_loss_weight=0.25,
         digit_classification_loss_weight=1.0,
+        gradient_checkpointing=args.gradient_checkpointing,
     )
 
     if checkpoint_dir is not None:
@@ -372,9 +375,13 @@ def main() -> None:
                 logging.info("Batch %s sampled digit references in %.2fs", step + 1, time.time() - refs_start)
                 processed_batch[config.digit_reference_image_key] = digit_references
 
+            from contextlib import nullcontext
+            autocast_ctx = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16) if (args.use_amp and device.type == "cuda") else nullcontext()
+
             logging.info("Batch %s starting forward pass...", step + 1)
             forward_start = time.time()
-            loss, loss_dict = policy.forward(processed_batch)
+            with autocast_ctx:
+                loss, loss_dict = policy.forward(processed_batch)
             logging.info("Batch %s forward pass completed in %.2fs", step + 1, time.time() - forward_start)
 
             log_memory_usage(f"Batch {step + 1} before backward")
@@ -387,7 +394,7 @@ def main() -> None:
             logging.info("Batch %s starting optimizer step...", step + 1)
             optim_start = time.time()
             optimizer.step()
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             logging.info("Batch %s optimizer step completed in %.2fs", step + 1, time.time() - optim_start)
             log_memory_usage(f"Batch {step + 1} after optimizer")
 

@@ -115,6 +115,9 @@ class SmolVLAConfig(PreTrainedConfig):
     compile_model: bool = False  # Whether to use torch.compile for model optimization
     compile_mode: str = "max-autotune"  # Torch compile mode
 
+    # Gradient checkpointing for memory optimization during training
+    gradient_checkpointing: bool = False
+
     def __post_init__(self):
         super().__post_init__()
 

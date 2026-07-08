@@ -795,6 +795,20 @@ class VLAFlowMatching(nn.Module):
         self.prefix_length = self.config.prefix_length
         self.rtc_processor = rtc_processor
 
+        # Enable gradient checkpointing if requested
+        if getattr(config, "gradient_checkpointing", False):
+            logging.info("[VLAFlowMatching] Enabling gradient checkpointing on VLM backbone and LM expert...")
+            for model in [self.vlm_with_expert.vlm, self.vlm_with_expert.lm_expert]:
+                enable_gc = getattr(model, "gradient_checkpointing_enable", None)
+                if callable(enable_gc):
+                    try:
+                        enable_gc(gradient_checkpointing_kwargs={"use_reentrant": False})
+                    except Exception:
+                        try:
+                            enable_gc()
+                        except Exception as e:
+                            logging.warning("Could not enable gradient checkpointing on %s: %s", model.__class__.__name__, e)
+
         # Compile model if requested
         if config.compile_model:
             torch.set_float32_matmul_precision("high")
