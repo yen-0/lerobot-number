@@ -276,16 +276,18 @@ def _run_backbone_context(
         )
         layer = model_layers[0][layer_idx]
         att_output = att_outputs[0].to(dtype=layer.self_attn.o_proj.weight.dtype)
+        hidden_states = hidden_states.to(dtype=layer.self_attn.o_proj.weight.dtype)
         residual = layer.self_attn.o_proj(att_output) + hidden_states
         after_residual = residual.clone()
         hidden_states = layer.post_attention_layernorm(residual)
+        hidden_states = hidden_states.to(dtype=layer.mlp.gate_proj.weight.dtype)
         hidden_states = layer.mlp(hidden_states)
         hidden_states = hidden_states + after_residual
         if zero_stage == f"text_layer_{layer_idx:02d}":
             hidden_states = torch.zeros_like(hidden_states)
         activations[f"text_layer_{layer_idx:02d}"] = masked_mean(hidden_states, prefix_pad_masks)
 
-    final_hidden = models[0].norm(hidden_states)
+    final_hidden = models[0].norm(hidden_states.to(dtype=models[0].norm.weight.dtype))
     if zero_stage == "text_final_norm":
         final_hidden = torch.zeros_like(final_hidden)
     activations["text_final_norm"] = masked_mean(final_hidden, prefix_pad_masks)
@@ -744,6 +746,9 @@ def main() -> None:
     api = HfApi()
     if args.push_to_hub:
         _make_repo(api, args.hub_repo_id)
+    logging.info("Resolved output dir: %s", output_dir)
+    logging.info("Resolved hub repo: %s", args.hub_repo_id)
+    logging.info("Resolved upload folder: %s", "blockwise_mnist_analysis_0707")
 
     teacher = SmolVLAPolicy.from_pretrained(
         args.teacher_repo_id,

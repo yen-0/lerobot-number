@@ -162,6 +162,9 @@ LOG_FILE="${LOG_DIR}/blockwise_mnist_analysis_0707_${PBS_JOBID:-manual}_$(date +
 echo "[$(date -Is)] starting MNIST probe job"
 echo "[$(date -Is)] log file: ${LOG_FILE}"
 echo "[$(date -Is)] args: ${ARGS[*]}"
+echo "[$(date -Is)] resolved output dir: ${OUTPUT_DIR}"
+echo "[$(date -Is)] resolved hub repo: ${HUB_REPO_ID}"
+echo "[$(date -Is)] resolved upload folder: blockwise_mnist_analysis_0707"
 
 BINDS=(
   --bind "${PBS_O_WORKDIR}:${PBS_O_WORKDIR}:rw"
