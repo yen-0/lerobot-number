@@ -15,10 +15,10 @@ fi
 
 for script in \
   "${ROOT_DIR}/scripts/train_smolvla_digits.pbs" \
-  "${ROOT_DIR}/scripts/train_smolvla_digits_blue_world.pbs"
+  "${ROOT_DIR}/scripts/train_smolvla_digits_blue_world.sh"
 do
   if [[ ! -f "${script}" ]]; then
-    echo "missing PBS script: ${script}" >&2
+    echo "missing launcher script: ${script}" >&2
     exit 1
   fi
 done
@@ -36,5 +36,5 @@ echo "Using blue-world policy repo: ${BLUE_POLICY_REPO_ID:-yen-0/smolvla-so101-d
 target_job="$(qsub "${ROOT_DIR}/scripts/train_smolvla_digits.pbs")"
 echo "Submitted target-image job: ${target_job}"
 
-blue_job="$(qsub "${ROOT_DIR}/scripts/train_smolvla_digits_blue_world.pbs")"
-echo "Submitted blue-world filter+training job: ${blue_job}"
+blue_job="$(bash "${ROOT_DIR}/scripts/train_smolvla_digits_blue_world.sh")"
+echo "${blue_job}"
