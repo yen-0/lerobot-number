@@ -41,6 +41,7 @@ from lerobot.processor import (
     transition_to_policy_action,
 )
 from lerobot.utils.constants import POLICY_POSTPROCESSOR_DEFAULT_NAME, POLICY_PREPROCESSOR_DEFAULT_NAME
+from lerobot.configs import FeatureType
 
 from .configuration_smolvla import SmolVLAConfig
 from .digit_utils import resolve_digit_label
@@ -227,6 +228,7 @@ class SmolVLABlueWorldProcessorStep(ObservationProcessorStep):
     saturation_min: float = 0.2
     value_min: float = 0.05
     target_image_key: str = "observation.target_drawing"
+    image_keys: list[str] | None = None
 
     def _filter_single_image(self, image: torch.Tensor | np.ndarray) -> torch.Tensor:
         filtered = _blue_mask_image(
@@ -240,9 +242,11 @@ class SmolVLABlueWorldProcessorStep(ObservationProcessorStep):
 
     def observation(self, observation: dict[str, Any]) -> dict[str, Any]:
         filtered_observation = observation.copy()
-        for key, value in observation.items():
-            if key == self.target_image_key or "image" not in key:
+        keys_to_filter = self.image_keys or []
+        for key in keys_to_filter:
+            if key == self.target_image_key or key not in observation:
                 continue
+            value = observation[key]
             if isinstance(value, torch.Tensor) and value.ndim == 4:
                 filtered_observation[key] = torch.stack([self._filter_single_image(sample) for sample in value], dim=0)
             elif isinstance(value, np.ndarray) and value.ndim == 4:
@@ -258,6 +262,7 @@ class SmolVLABlueWorldProcessorStep(ObservationProcessorStep):
             "saturation_min": self.saturation_min,
             "value_min": self.value_min,
             "target_image_key": self.target_image_key,
+            "image_keys": self.image_keys,
         }
 
     def transform_features(self, features):
@@ -300,12 +305,18 @@ def make_smolvla_pre_post_processors(
         SmolVLAGoalImageProcessorStep(),
     ]
     if config.blue_world_filter:
+        image_keys = [
+            key
+            for key, feature in config.input_features.items()
+            if feature.type == FeatureType.VISUAL and key != "observation.target_drawing"
+        ]
         input_steps.append(
             SmolVLABlueWorldProcessorStep(
                 hue_min=config.blue_world_hue_min,
                 hue_max=config.blue_world_hue_max,
                 saturation_min=config.blue_world_saturation_min,
                 value_min=config.blue_world_value_min,
+                image_keys=image_keys,
             )
         )
     input_steps.extend([

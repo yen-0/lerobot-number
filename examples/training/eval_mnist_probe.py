@@ -176,6 +176,8 @@ def _first_image_feature_key(teacher: SmolVLAPolicy) -> str:
 def _build_context_batch(
     teacher: SmolVLAPolicy, images: torch.Tensor, teacher_device: torch.device
 ) -> dict[str, torch.Tensor]:
+    if images.ndim == 4 and images.shape[1] == 1:
+        images = images.repeat(1, 3, 1, 1)
     tokenizer = teacher.model.vlm_with_expert.processor.tokenizer
     encoded = tokenizer(
         "MNIST digit recognition.",

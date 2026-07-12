@@ -41,6 +41,41 @@ def test_pool_activation_handles_spatial_and_vector_tensors():
     assert mod._pool_activation(vector).shape == (3, 8)
 
 
+def test_build_context_batch_promotes_grayscale_images_to_rgb():
+    mod = _load_module()
+    teacher = type(
+        "Teacher",
+        (),
+        {
+            "config": type("Config", (), {"tokenizer_max_length": 8, "max_state_dim": 32, "image_features": ["image"]})(),
+            "model": type(
+                "Model",
+                (),
+                {
+                    "vlm_with_expert": type(
+                        "VLM",
+                        (),
+                        {
+                            "processor": type(
+                                "Processor",
+                                (),
+                                {
+                                    "tokenizer": lambda *args, **kwargs: {
+                                        "input_ids": torch.ones(1, 8, dtype=torch.long),
+                                        "attention_mask": torch.ones(1, 8, dtype=torch.long),
+                                    }
+                                },
+                            )(),
+                        },
+                    )(),
+                },
+            )(),
+        },
+    )()
+    batch = mod._build_context_batch(teacher, torch.randn(2, 1, 4, 4), torch.device("cpu"))
+    assert batch["image"].shape == (2, 3, 4, 4)
+
+
 def test_build_report_mentions_probe_sections():
     mod = _load_module()
     args = type(
