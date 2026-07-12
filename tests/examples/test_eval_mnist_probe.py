@@ -17,57 +17,62 @@ def _load_module():
     return module
 
 
-def test_teacher_logits_uses_digit_branch():
+def test_ridge_probe_fits_simple_linear_problem():
     mod = _load_module()
-
-    class FakeTeacher:
-        def __init__(self):
-            self.config = type("Cfg", (), {"device": "cpu"})()
-            self._prepare_called = False
-            self.digit_reference_encoder = torch.nn.Flatten()
-            self.digit_reference_projection = torch.nn.Identity()
-            self.digit_context_head = torch.nn.Linear(28 * 28, 10)
-
-        def _prepare_digit_reference_images(self, images, device):
-            self._prepare_called = True
-            return images.to(device)
-
-    teacher = FakeTeacher()
-    logits = mod._teacher_logits(teacher, torch.randn(2, 1, 28, 28))
-    assert teacher._prepare_called is True
-    assert logits.shape == (2, 10)
+    features = torch.tensor(
+        [
+            [0.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 0.0],
+            [1.0, 1.0],
+        ]
+    )
+    labels = torch.tensor([0, 0, 1, 1])
+    probe = mod._fit_ridge_probe(features, labels, ridge_l2=1e-4)
+    preds = mod._predict_ridge_probe(probe, features)
+    assert preds.tolist() == labels.tolist()
 
 
-def test_evaluate_returns_expected_metrics_shape():
+def test_pool_activation_handles_spatial_and_vector_tensors():
     mod = _load_module()
+    spatial = torch.randn(3, 4, 5, 5)
+    vector = torch.randn(3, 8)
+    assert mod._pool_activation(spatial).shape == (3, 4)
+    assert mod._pool_activation(vector).shape == (3, 8)
 
-    class FakeTeacher(torch.nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.config = type("Cfg", (), {"device": "cpu"})()
-            self.digit_reference_encoder = torch.nn.Flatten()
-            self.digit_reference_projection = torch.nn.Identity()
-            self.digit_context_head = torch.nn.Linear(28 * 28, 10)
-            self._prepare_called = 0
 
-        def _prepare_digit_reference_images(self, images, device):
-            self._prepare_called += 1
-            return images.to(device)
-
-    teacher = FakeTeacher()
-    images = torch.randn(6, 1, 28, 28)
-    labels = torch.tensor([0, 1, 2, 3, 4, 5])
-    loader = [(images, labels)]
-
-    metrics = mod._evaluate(teacher, loader, torch.device("cpu"))
-    assert set(metrics) == {
-        "loss",
-        "accuracy",
-        "mean_confidence",
-        "examples",
-        "per_class_accuracy",
-        "confusion_matrix",
-    }
-    assert metrics["examples"] == 6
-    assert len(metrics["confusion_matrix"]) == 10
-    assert teacher._prepare_called == 1
+def test_build_report_mentions_probe_sections():
+    mod = _load_module()
+    args = type(
+        "Args",
+        (),
+        {
+            "teacher_repo_id": "teacher/test",
+            "hub_repo_id": "hub/test",
+            "probe_train_subset": 5,
+            "probe_eval_subset": 3,
+            "ablation_subset": 7,
+            "attribution_examples": 1,
+            "ridge_l2": 0.01,
+            "saliency_topk_fraction": 0.1,
+        },
+    )()
+    baseline = {"examples": 10, "accuracy": 0.4, "loss": 1.2, "mean_confidence": 0.6}
+    ablations = [{"target": "encoder_conv1", "accuracy": 0.3, "loss": 1.4}]
+    probes = [{"tap": "encoder_conv1", "train_accuracy": 0.9, "eval_accuracy": 0.8}]
+    attributions = [
+        {
+            "index": 0,
+            "label": 1,
+            "predicted": 1,
+            "confidence": 0.95,
+            "concentration_top10pct": 0.5,
+            "top_pixels": [],
+            "artifacts": {"input": "assets/a.png", "saliency": "assets/b.png", "combined": "assets/c.png"},
+        }
+    ]
+    report = mod._build_report(args, baseline, ablations, probes, attributions)
+    assert "Frozen Baseline" in report
+    assert "Causal Ablations" in report
+    assert "Linear Diagnostic Probes" in report
+    assert "Attribution Examples" in report

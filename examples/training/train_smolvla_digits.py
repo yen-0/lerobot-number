@@ -63,7 +63,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_dir", default="outputs/train/smolvla_so101_digits")
     parser.add_argument("--job_name", default="smolvla_so101_digits")
     parser.add_argument("--policy.device", dest="device", default="cuda")
-    parser.add_argument("--steps", type=int, default=30_000)
+    parser.add_argument("--steps", type=int, default=50_000)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--save_freq", type=int, default=1_000)
@@ -452,7 +452,6 @@ def main() -> None:
                     break
                 else:
                     logging.warning("Checkpoint %s is corrupted or incomplete. Deleting and skipping.", ckpt)
-                    import shutil
                     try:
                         shutil.rmtree(ckpt)
                     except Exception as e:
@@ -876,7 +875,6 @@ def main() -> None:
                             # Clean up the temporary (youngest/latest) checkpoint to free space
                             if tmp_checkpoint_dir.exists():
                                 logging.warning("[Disk Error] Write failed. Deleting temporary/incomplete checkpoint directory %s...", tmp_checkpoint_dir)
-                                import shutil
                                 try:
                                     shutil.rmtree(tmp_checkpoint_dir)
                                 except Exception as clean_err:
@@ -894,7 +892,6 @@ def main() -> None:
                             except Exception as retry_err:
                                 logging.error("[Disk Recovery] Checkpoint saving failed even after cleanup: %s", retry_err)
                                 if tmp_checkpoint_dir.exists():
-                                    import shutil
                                     try:
                                         shutil.rmtree(tmp_checkpoint_dir)
                                     except Exception:

@@ -10,7 +10,9 @@ set -euo pipefail
 
 # First export the blue-world dataset, then train on it in the same PBS job so
 # training cannot start before the filtered dataset exists.
-bash "$(dirname "$0")/filter_blue_world.pbs"
+PBS_O_WORKDIR="${PBS_O_WORKDIR:-$(pwd)}"
+
+bash "${PBS_O_WORKDIR}/scripts/filter_blue_world.pbs"
 
 export DATASET_REPO_ID="${DATASET_REPO_ID:-${FILTERED_DATASET_REPO_ID:-yen-0/so101-write-5-kadokawa-blue-world}}"
 export BLUE_WORLD_FILTER="${BLUE_WORLD_FILTER:-true}"
@@ -20,4 +22,4 @@ export OUTPUT_DIR="${OUTPUT_DIR:-./outputs/smolvla_digits_blue_world}"
 export HUB_ONLY="true"
 export PUSH_TO_HUB="true"
 
-exec bash "$(dirname "$0")/train_smolvla_digits.pbs"
+exec bash "${PBS_O_WORKDIR}/scripts/train_smolvla_digits.pbs"
