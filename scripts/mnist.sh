@@ -11,9 +11,9 @@ if [[ -f config.shared.env ]]; then
 fi
 
 export TEACHER_REPO_ID="${TEACHER_REPO_ID:-yen-0/smolvla-so101-digits-0707}"
-export HUB_REPO_ID="${HUB_REPO_ID:-yen-0/smolvla-0707-no-training-mnist-probe}"
-export OUTPUT_DIR="${OUTPUT_DIR:-./outputs/no_training_mnist_probe_0707}"
-export JOB_NAME="${JOB_NAME:-no_training_mnist_probe_0707}"
+export HUB_REPO_ID="${HUB_REPO_ID:-yen-0/smolvla-0707-blockwise-mnist-analysis}"
+export OUTPUT_DIR="${OUTPUT_DIR:-./outputs/blockwise_mnist_analysis_0707}"
+export JOB_NAME="${JOB_NAME:-blockwise_mnist_analysis_0707}"
 export DEVICE="${DEVICE:-cuda}"
 export TEACHER_DEVICE="${TEACHER_DEVICE:-${DEVICE}}"
 export BATCH_SIZE="${BATCH_SIZE:-512}"

@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N no_training_mnist_probe_0707
+#PBS -N blockwise_mnist_analysis_0707
 #PBS -q regular-g
 #PBS -W group_list=gw13
 #PBS -l select=1:ncpus=16:mem=60gb
@@ -41,9 +41,9 @@ if [[ -f config.shared.env ]]; then
 fi
 
 TEACHER_REPO_ID="${TEACHER_REPO_ID_OVERRIDE:-${TEACHER_REPO_ID:-yen-0/smolvla-so101-digits-0707}}"
-HUB_REPO_ID="${HUB_REPO_ID_OVERRIDE:-${HUB_REPO_ID:-yen-0/smolvla-0707-no-training-mnist-probe}}"
-OUTPUT_DIR="${OUTPUT_DIR_OVERRIDE:-${OUTPUT_DIR:-./outputs/no_training_mnist_probe_0707}}"
-JOB_NAME="${JOB_NAME_OVERRIDE:-${JOB_NAME:-no_training_mnist_probe_0707}}"
+HUB_REPO_ID="${HUB_REPO_ID_OVERRIDE:-${HUB_REPO_ID:-yen-0/smolvla-0707-blockwise-mnist-analysis}}"
+OUTPUT_DIR="${OUTPUT_DIR_OVERRIDE:-${OUTPUT_DIR:-./outputs/blockwise_mnist_analysis_0707}}"
+JOB_NAME="${JOB_NAME_OVERRIDE:-${JOB_NAME:-blockwise_mnist_analysis_0707}}"
 DEVICE="${DEVICE_OVERRIDE:-${DEVICE:-cuda}}"
 TEACHER_DEVICE="${TEACHER_DEVICE_OVERRIDE:-${TEACHER_DEVICE:-$DEVICE}}"
 BATCH_SIZE="${BATCH_SIZE_OVERRIDE:-${BATCH_SIZE:-512}}"
@@ -157,7 +157,7 @@ fi
 
 LOG_DIR="${PBS_O_WORKDIR}/logs"
 mkdir -p "${LOG_DIR}"
-LOG_FILE="${LOG_DIR}/no_training_mnist_probe_0707_${PBS_JOBID:-manual}_$(date +%Y%m%d_%H%M%S).log"
+LOG_FILE="${LOG_DIR}/blockwise_mnist_analysis_0707_${PBS_JOBID:-manual}_$(date +%Y%m%d_%H%M%S).log"
 
 echo "[$(date -Is)] starting MNIST probe job"
 echo "[$(date -Is)] log file: ${LOG_FILE}"

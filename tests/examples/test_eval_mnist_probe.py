@@ -58,8 +58,11 @@ def test_build_report_mentions_probe_sections():
         },
     )()
     baseline = {"examples": 10, "accuracy": 0.4, "loss": 1.2, "mean_confidence": 0.6}
-    ablations = [{"target": "encoder_conv1", "accuracy": 0.3, "loss": 1.4}]
-    probes = [{"tap": "encoder_conv1", "train_accuracy": 0.9, "eval_accuracy": 0.8}]
+    ablations = [{"target": "text_layer_00", "accuracy": 0.3, "loss": 1.4}]
+    backbone_probes = [
+        {"tap": "vision_encoder", "train_accuracy": 0.2, "eval_accuracy": 0.2},
+        {"tap": "text_layer_00", "train_accuracy": 0.6, "eval_accuracy": 0.5},
+    ]
     attributions = [
         {
             "index": 0,
@@ -71,8 +74,8 @@ def test_build_report_mentions_probe_sections():
             "artifacts": {"input": "assets/a.png", "saliency": "assets/b.png", "combined": "assets/c.png"},
         }
     ]
-    report = mod._build_report(args, baseline, ablations, probes, attributions)
+    report = mod._build_report(args, baseline, ablations, backbone_probes, ablations, attributions)
     assert "Frozen Baseline" in report
+    assert "Backbone Analysis" in report
     assert "Causal Ablations" in report
-    assert "Linear Diagnostic Probes" in report
     assert "Attribution Examples" in report

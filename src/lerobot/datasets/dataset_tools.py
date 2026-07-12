@@ -2016,6 +2016,10 @@ def filter_blue_world_dataset(
         value_min,
     )
 
+    if output_dir.exists():
+        logging.warning("Output directory %s already exists. Removing it before blue-world export.", output_dir)
+        shutil.rmtree(output_dir)
+
     new_dataset = LeRobotDataset.create(
         repo_id=repo_id,
         fps=dataset.meta.fps,

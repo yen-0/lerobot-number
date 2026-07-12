@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Evaluate the frozen 0707 SmolVLA teacher on MNIST without training."""
+"""Analyze where frozen MNIST digit information lives inside SmolVLA without training."""
 
 from __future__ import annotations
 
@@ -48,16 +48,17 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
+from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy, make_att_2d_masks, masked_mean
+from lerobot.utils.constants import OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS, OBS_STATE
 from lerobot.utils.utils import init_logging
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--teacher.repo_id", dest="teacher_repo_id", default="yen-0/smolvla-so101-digits-0707")
-    parser.add_argument("--hub_repo_id", default="yen-0/smolvla-0707-no-training-mnist-probe")
-    parser.add_argument("--output_dir", default="outputs/no_training_mnist_probe_0707")
-    parser.add_argument("--job_name", default="no_training_mnist_probe_0707")
+    parser.add_argument("--hub_repo_id", default="yen-0/smolvla-0707-blockwise-mnist-analysis")
+    parser.add_argument("--output_dir", default="outputs/blockwise_mnist_analysis_0707")
+    parser.add_argument("--job_name", default="blockwise_mnist_analysis_0707")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--teacher.device", dest="teacher_device", default=None)
     parser.add_argument("--batch_size", type=int, default=512)
@@ -163,69 +164,130 @@ def _resolve_module(root: torch.nn.Module, path: str) -> torch.nn.Module:
     return module
 
 
-def _tap_modules(teacher: SmolVLAPolicy) -> dict[str, str]:
+def _first_image_feature_key(teacher: SmolVLAPolicy) -> str:
+    image_features = teacher.config.image_features
+    if isinstance(image_features, dict):
+        return next(iter(image_features))
+    if isinstance(image_features, (list, tuple)):
+        return str(image_features[0])
+    return str(image_features)
+
+
+def _build_context_batch(
+    teacher: SmolVLAPolicy, images: torch.Tensor, teacher_device: torch.device
+) -> dict[str, torch.Tensor]:
+    tokenizer = teacher.model.vlm_with_expert.processor.tokenizer
+    encoded = tokenizer(
+        "MNIST digit recognition.",
+        return_tensors="pt",
+        padding="max_length",
+        truncation=True,
+        max_length=teacher.config.tokenizer_max_length,
+    )
+    batch_size = images.shape[0]
+    lang_tokens = encoded["input_ids"].expand(batch_size, -1).contiguous().to(device=teacher_device)
+    lang_masks = encoded["attention_mask"].expand(batch_size, -1).contiguous().to(device=teacher_device).bool()
+    state = torch.zeros(batch_size, teacher.config.max_state_dim, device=teacher_device)
     return {
-        "encoder_conv1": "digit_reference_encoder.encoder.0",
-        "encoder_conv2": "digit_reference_encoder.encoder.2",
-        "encoder_conv3": "digit_reference_encoder.encoder.4",
-        "encoder_pool": "digit_reference_encoder.encoder.6",
-        "encoder_embed": "digit_reference_encoder.encoder.8",
-        "projection": "digit_reference_projection",
+        _first_image_feature_key(teacher): images.to(device=teacher_device),
+        OBS_LANGUAGE_TOKENS: lang_tokens,
+        OBS_LANGUAGE_ATTENTION_MASK: lang_masks,
+        OBS_STATE: state,
     }
 
 
-def _ablation_targets(teacher: SmolVLAPolicy) -> dict[str, str]:
-    targets = _tap_modules(teacher)
-    targets.update(
-        {
-            "context_head": "digit_context_head",
-        }
-    )
-    return targets
+def _backbone_stage_names(teacher: SmolVLAPolicy) -> list[str]:
+    num_layers = teacher.model.vlm_with_expert.num_vlm_layers
+    return [
+        "vision_encoder",
+        "connector",
+        "prefix_input",
+        *[f"text_layer_{layer_idx:02d}" for layer_idx in range(num_layers)],
+        "text_final_norm",
+    ]
 
 
 def _pool_activation(activation: torch.Tensor) -> torch.Tensor:
     if activation.ndim == 4:
         activation = F.adaptive_avg_pool2d(activation, (1, 1)).flatten(1)
     elif activation.ndim == 3:
-        activation = activation.flatten(1)
+        activation = activation.mean(dim=1)
     elif activation.ndim != 2:
         activation = activation.reshape(activation.shape[0], -1)
     return activation.float()
 
 
-def _teacher_logits(teacher: SmolVLAPolicy, images: torch.Tensor) -> torch.Tensor:
-    teacher_device = torch.device(teacher.config.device or "cpu")
-    images = teacher._prepare_digit_reference_images(images, device=teacher_device)
-    embeddings = teacher.digit_reference_encoder(images)
-    context = teacher.digit_reference_projection(embeddings)
-    return teacher.digit_context_head(context)
-
-
-def _capture_taps(
+def _run_backbone_context(
     teacher: SmolVLAPolicy,
     images: torch.Tensor,
-    tap_paths: dict[str, str],
+    teacher_device: torch.device,
+    *,
+    zero_stage: str | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     activations: dict[str, torch.Tensor] = {}
-    hooks = []
+    batch = _build_context_batch(teacher, images, teacher_device)
+    prepared_images, img_masks = teacher.prepare_images(batch)
+    state = torch.zeros(images.shape[0], teacher.config.max_state_dim, device=teacher_device)
+    lang_tokens = batch[OBS_LANGUAGE_TOKENS]
+    lang_masks = batch[OBS_LANGUAGE_ATTENTION_MASK]
 
-    def _make_hook(name: str):
-        def _hook(_module, _inputs, output):
-            activations[name] = output.detach()
+    vlm = teacher.model.vlm_with_expert
+    models = [vlm.get_vlm_model().text_model, vlm.lm_expert]
+    model_layers = vlm.get_model_layers(models)
+    head_dim = vlm.vlm.config.text_config.head_dim
 
-        return _hook
+    vision_hidden = vlm.get_vlm_model().vision_model(
+        pixel_values=prepared_images[0].to(dtype=vlm.get_vlm_model().vision_model.dtype),
+        patch_attention_mask=None,
+    ).last_hidden_state
+    if zero_stage == "vision_encoder":
+        vision_hidden = torch.zeros_like(vision_hidden)
+    activations["vision_encoder"] = _pool_activation(vision_hidden)
 
-    for tap_name, tap_path in tap_paths.items():
-        module = _resolve_module(teacher, tap_path)
-        hooks.append(module.register_forward_hook(_make_hook(tap_name)))
+    connector_hidden = vlm.get_vlm_model().connector(vision_hidden)
+    if zero_stage == "connector":
+        connector_hidden = torch.zeros_like(connector_hidden)
+    activations["connector"] = _pool_activation(connector_hidden)
 
-    try:
-        logits = _teacher_logits(teacher, images)
-    finally:
-        for hook in hooks:
-            hook.remove()
+    prefix_embs, prefix_pad_masks, prefix_att_masks = teacher.model.embed_prefix(
+        prepared_images, img_masks, lang_tokens, lang_masks, state=state
+    )
+    if zero_stage == "prefix_input":
+        prefix_embs = torch.zeros_like(prefix_embs)
+    activations["prefix_input"] = masked_mean(prefix_embs, prefix_pad_masks)
 
+    prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
+    prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+    hidden_states = prefix_embs
+    for layer_idx in range(vlm.num_vlm_layers):
+        att_outputs, _ = vlm.forward_attn_layer(
+            model_layers,
+            [hidden_states, None],
+            layer_idx,
+            prefix_position_ids,
+            prefix_att_2d_masks,
+            batch_size=hidden_states.shape[0],
+            head_dim=head_dim,
+            use_cache=False,
+            fill_kv_cache=True,
+            past_key_values=None,
+        )
+        layer = model_layers[0][layer_idx]
+        att_output = att_outputs[0].to(dtype=layer.self_attn.o_proj.weight.dtype)
+        residual = layer.self_attn.o_proj(att_output) + hidden_states
+        after_residual = residual.clone()
+        hidden_states = layer.post_attention_layernorm(residual)
+        hidden_states = layer.mlp(hidden_states)
+        hidden_states = hidden_states + after_residual
+        if zero_stage == f"text_layer_{layer_idx:02d}":
+            hidden_states = torch.zeros_like(hidden_states)
+        activations[f"text_layer_{layer_idx:02d}"] = masked_mean(hidden_states, prefix_pad_masks)
+
+    final_hidden = models[0].norm(hidden_states)
+    if zero_stage == "text_final_norm":
+        final_hidden = torch.zeros_like(final_hidden)
+    activations["text_final_norm"] = masked_mean(final_hidden, prefix_pad_masks)
+    logits = teacher.digit_context_head(activations["text_final_norm"])
     return logits, activations
 
 
@@ -247,7 +309,7 @@ def _evaluate(
         for images, labels in loader:
             images = images.to(teacher_device, non_blocking=True)
             labels = labels.to(teacher_device, non_blocking=True)
-            logits = _teacher_logits(teacher, images)
+            logits, _ = _run_backbone_context(teacher, images, teacher_device)
             loss = torch.nn.functional.cross_entropy(logits, labels)
             probs = torch.softmax(logits, dim=-1)
             preds = probs.argmax(dim=-1)
@@ -283,73 +345,58 @@ def _evaluate_ablation(
     loader: DataLoader,
     teacher_device: torch.device,
     target_path: str | None,
-    *,
-    zero_input: bool = False,
 ) -> dict[str, Any]:
+    zero_stage = target_path
     teacher.eval()
-    if zero_input:
-        total_examples = 0
-        total_loss = 0.0
-        total_correct = 0
-        total_confidence = 0.0
-        per_class_correct = [0 for _ in range(10)]
-        per_class_total = [0 for _ in range(10)]
-        confusion = [[0 for _ in range(10)] for _ in range(10)]
+    total_examples = 0
+    total_loss = 0.0
+    total_correct = 0
+    total_confidence = 0.0
+    per_class_correct = [0 for _ in range(10)]
+    per_class_total = [0 for _ in range(10)]
+    confusion = [[0 for _ in range(10)] for _ in range(10)]
 
-        with torch.no_grad():
-            for images, labels in loader:
-                images = torch.zeros_like(images).to(teacher_device, non_blocking=True)
-                labels = labels.to(teacher_device, non_blocking=True)
-                logits = _teacher_logits(teacher, images)
-                loss = F.cross_entropy(logits, labels)
-                probs = torch.softmax(logits, dim=-1)
-                preds = probs.argmax(dim=-1)
+    with torch.no_grad():
+        for images, labels in loader:
+            images = images.to(teacher_device, non_blocking=True)
+            labels = labels.to(teacher_device, non_blocking=True)
+            logits, _ = _run_backbone_context(teacher, images, teacher_device, zero_stage=zero_stage)
+            loss = torch.nn.functional.cross_entropy(logits, labels)
+            probs = torch.softmax(logits, dim=-1)
+            preds = probs.argmax(dim=-1)
 
-                batch_size = labels.shape[0]
-                total_examples += batch_size
-                total_loss += float(loss.detach().cpu()) * batch_size
-                total_correct += int((preds == labels).sum().item())
-                total_confidence += float(probs.max(dim=-1).values.mean().detach().cpu()) * batch_size
+            batch_size = labels.shape[0]
+            total_examples += batch_size
+            total_loss += float(loss.detach().cpu()) * batch_size
+            total_correct += int((preds == labels).sum().item())
+            total_confidence += float(probs.max(dim=-1).values.mean().detach().cpu()) * batch_size
 
-                for label, pred in zip(labels.tolist(), preds.tolist(), strict=False):
-                    per_class_total[label] += 1
-                    confusion[label][pred] += 1
-                    if label == pred:
-                        per_class_correct[label] += 1
+            for label, pred in zip(labels.tolist(), preds.tolist(), strict=False):
+                per_class_total[label] += 1
+                confusion[label][pred] += 1
+                if label == pred:
+                    per_class_correct[label] += 1
 
-        per_class_accuracy = {
-            str(digit): (per_class_correct[digit] / per_class_total[digit] if per_class_total[digit] else 0.0)
-            for digit in range(10)
-        }
-        return {
-            "loss": total_loss / max(total_examples, 1),
-            "accuracy": total_correct / max(total_examples, 1),
-            "mean_confidence": total_confidence / max(total_examples, 1),
-            "examples": total_examples,
-            "per_class_accuracy": per_class_accuracy,
-            "confusion_matrix": confusion,
-        }
-
-    target_module = _resolve_module(teacher, target_path) if target_path is not None else None
-    hook = None
-    if target_module is not None:
-        hook = target_module.register_forward_hook(lambda _m, _i, output: torch.zeros_like(output))
-
-    try:
-        metrics = _evaluate(teacher, loader, teacher_device)
-    finally:
-        if hook is not None:
-            hook.remove()
-    return metrics
+    per_class_accuracy = {
+        str(digit): (per_class_correct[digit] / per_class_total[digit] if per_class_total[digit] else 0.0)
+        for digit in range(10)
+    }
+    return {
+        "loss": total_loss / max(total_examples, 1),
+        "accuracy": total_correct / max(total_examples, 1),
+        "mean_confidence": total_confidence / max(total_examples, 1),
+        "examples": total_examples,
+        "per_class_accuracy": per_class_accuracy,
+        "confusion_matrix": confusion,
+    }
 
 
 def _collect_feature_bank(
     teacher: SmolVLAPolicy,
     loader: DataLoader,
     teacher_device: torch.device,
-    tap_paths: dict[str, str],
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
-    feature_rows: dict[str, list[torch.Tensor]] = {name: [] for name in tap_paths}
+    feature_rows: dict[str, list[torch.Tensor]] = {name: [] for name in _backbone_stage_names(teacher)}
     labels: list[torch.Tensor] = []
 
     teacher.eval()
@@ -357,7 +404,7 @@ def _collect_feature_bank(
         for images, batch_labels in loader:
             images = images.to(teacher_device, non_blocking=True)
             batch_labels = batch_labels.to(teacher_device, non_blocking=True)
-            _, activations = _capture_taps(teacher, images, tap_paths)
+            _, activations = _run_backbone_context(teacher, images, teacher_device)
             for tap_name, activation in activations.items():
                 feature_rows[tap_name].append(_pool_activation(activation).cpu())
             labels.append(batch_labels.cpu())
@@ -382,7 +429,7 @@ def _select_attribution_examples(
         for idx in range(len(dataset)):
             image, label = dataset[idx]
             image_tensor = _image_to_tensor(image)
-            logits = _teacher_logits(teacher, image_tensor.unsqueeze(0).to(teacher_device))
+            logits, _ = _run_backbone_context(teacher, image_tensor.unsqueeze(0).to(teacher_device), teacher_device)
             pred = int(logits.argmax(dim=-1).item())
             item = {
                 "index": idx,
@@ -465,7 +512,7 @@ def _saliency_map(
 ) -> dict[str, Any]:
     teacher.eval()
     image = image.unsqueeze(0).to(teacher_device).clone().detach().requires_grad_(True)
-    logits = _teacher_logits(teacher, image)
+    logits, _ = _run_backbone_context(teacher, image, teacher_device)
     probs = torch.softmax(logits, dim=-1)
     pred = int(probs.argmax(dim=-1).item())
     target = pred if use_predicted_label else label
@@ -560,16 +607,22 @@ def _build_report(
     args: argparse.Namespace,
     baseline: dict[str, Any],
     ablations: list[dict[str, Any]],
-    probes: list[dict[str, Any]],
+    backbone_probes: list[dict[str, Any]],
+    backbone_ablations: list[dict[str, Any]],
     attributions: list[dict[str, Any]],
 ) -> str:
     best_ablation = max(ablations, key=lambda row: float(baseline["accuracy"]) - float(row["accuracy"]))
-    best_probe = max(probes, key=lambda row: float(row["eval_accuracy"]))
+    best_backbone_probe = max(backbone_probes, key=lambda row: float(row["eval_accuracy"]))
+    best_backbone_ablation = max(backbone_ablations, key=lambda row: float(baseline["accuracy"]) - float(row["accuracy"]))
+    ablation_by_target = {row["target"]: row for row in backbone_ablations}
     conclusion = (
         f"The strongest causal dependency is `{best_ablation['target']}` with an accuracy drop of "
         f"{_format_pct(float(baseline['accuracy']) - float(best_ablation['accuracy']))}. "
-        f"The best linear probe is `{best_probe['tap']}` at {_format_pct(float(best_probe['eval_accuracy']))}, "
-        f"so digit information is already most accessible at that tap."
+        f"The strongest backbone probe is `{best_backbone_probe['tap']}` at "
+        f"{_format_pct(float(best_backbone_probe['eval_accuracy']))}. "
+        f"The most damaging backbone ablation is `{best_backbone_ablation['target']}` with a drop of "
+        f"{_format_pct(float(baseline['accuracy']) - float(best_backbone_ablation['accuracy']))}, "
+        f"so the digit signal is most readable and most causally exposed in that block."
     )
     report = []
     report.append(f"# MNIST No-Training Probe for {args.teacher_repo_id}")
@@ -600,6 +653,27 @@ def _build_report(
         )
     )
     report.append("")
+    report.append("## Backbone Analysis")
+    report.append(
+        "These probes use a constant prompt and zero state so the only changing input is the MNIST image. "
+        "The table combines linear readability and causal sensitivity for each stage of the frozen backbone."
+    )
+    report.append(
+        _render_table(
+            ["Block", "Train acc", "Eval acc", "Drop vs baseline", "Loss"],
+            [
+                [
+                    item["tap"],
+                    _format_pct(float(item["train_accuracy"])),
+                    _format_pct(float(item["eval_accuracy"])),
+                    _format_pct(float(baseline["accuracy"]) - float(ablation_by_target[item["tap"]]["accuracy"])),
+                    _format_float(float(ablation_by_target[item["tap"]]["loss"])),
+                ]
+                for item in backbone_probes
+            ],
+        )
+    )
+    report.append("")
     report.append("## Causal Ablations")
     report.append(
         _render_table(
@@ -612,21 +686,6 @@ def _build_report(
                     _format_float(float(item["loss"])),
                 ]
                 for item in sorted(ablations, key=lambda row: float(baseline["accuracy"]) - float(row["accuracy"]), reverse=True)
-            ],
-        )
-    )
-    report.append("")
-    report.append("## Linear Diagnostic Probes")
-    report.append(
-        _render_table(
-            ["Feature tap", "Train acc", "Eval acc"],
-            [
-                [
-                    item["tap"],
-                    _format_pct(float(item["train_accuracy"])),
-                    _format_pct(float(item["eval_accuracy"])),
-                ]
-                for item in sorted(probes, key=lambda row: float(row["eval_accuracy"]), reverse=True)
             ],
         )
     )
@@ -647,8 +706,8 @@ def _build_report(
     report.append("## Readout")
     report.append(conclusion)
     report.append(
-        "The strongest causal evidence comes from the ablation that drops accuracy the most. "
-        "The linear probes show where digit information becomes linearly accessible, and the saliency maps show which pixels drive the frozen prediction."
+        "The causal ablations show which frozen modules the classifier truly depends on. "
+        "The backbone analysis shows where digit information is linearly recoverable and where removing a stage hurts the prediction."
     )
     return "\n".join(report) + "\n"
 
@@ -669,7 +728,7 @@ def main() -> None:
     teacher_device = _resolve_device(args.teacher_device or args.device)
 
     init_logging(console_level="INFO", file_level="DEBUG")
-    logging.info("Starting MNIST probe")
+    logging.info("Starting MNIST block analysis")
     logging.info("Arguments: %s", vars(args))
 
     torch.manual_seed(args.seed)
@@ -736,7 +795,7 @@ def main() -> None:
     baseline = _evaluate(teacher, baseline_loader, teacher_device)
     _append_jsonl(metrics_file, {"phase": "baseline", **baseline})
 
-    ablation_targets = _ablation_targets(teacher)
+    ablation_targets = {name: name for name in _backbone_stage_names(teacher)}
     ablation_results: list[dict[str, Any]] = []
     for name, path in ablation_targets.items():
         metrics = _evaluate_ablation(teacher, baseline_loader, teacher_device, path)
@@ -744,27 +803,21 @@ def main() -> None:
         ablation_results.append(ablation_row)
         _append_jsonl(metrics_file, {"phase": "ablation", **ablation_row})
 
-    zero_input_metrics = _evaluate_ablation(teacher, baseline_loader, teacher_device, target_path=None, zero_input=True)
-    zero_input_row = {"target": "zero_input", **zero_input_metrics}
-    ablation_results.append(zero_input_row)
-    _append_jsonl(metrics_file, {"phase": "ablation", **zero_input_row})
+    backbone_train_features, backbone_train_labels = _collect_feature_bank(teacher, probe_train_loader, teacher_device)
+    backbone_eval_features, backbone_eval_labels = _collect_feature_bank(teacher, probe_eval_loader, teacher_device)
 
-    tap_paths = _tap_modules(teacher)
-    train_features, train_labels = _collect_feature_bank(teacher, probe_train_loader, teacher_device, tap_paths)
-    eval_features, eval_labels = _collect_feature_bank(teacher, probe_eval_loader, teacher_device, tap_paths)
-
-    probe_results: list[dict[str, Any]] = []
-    for tap_name in tap_paths:
+    backbone_probe_results: list[dict[str, Any]] = []
+    for tap_name in _backbone_stage_names(teacher):
         probe_metrics = _evaluate_ridge_probe(
-            train_features[tap_name],
-            train_labels,
-            eval_features[tap_name],
-            eval_labels,
+            backbone_train_features[tap_name],
+            backbone_train_labels,
+            backbone_eval_features[tap_name],
+            backbone_eval_labels,
             ridge_l2=args.ridge_l2,
         )
         row = {"tap": tap_name, **probe_metrics}
-        probe_results.append(row)
-        _append_jsonl(metrics_file, {"phase": "linear_probe", **row})
+        backbone_probe_results.append(row)
+        _append_jsonl(metrics_file, {"phase": "backbone_probe", **row})
 
     attribution_dataset = _subset_dataset(test_dataset, max(args.attribution_examples * 4, args.attribution_examples), args.seed + 3)
     selected_examples = _select_attribution_examples(
@@ -811,24 +864,40 @@ def main() -> None:
         "best_ablation_drop": max(
             baseline["accuracy"] - float(row["accuracy"]) for row in ablation_results
         ),
-        "best_linear_probe_accuracy": max(float(row["eval_accuracy"]) for row in probe_results),
+        "best_backbone_probe_accuracy": max(float(row["eval_accuracy"]) for row in backbone_probe_results),
+        "best_backbone_probe_tap": max(backbone_probe_results, key=lambda row: float(row["eval_accuracy"]))["tap"],
+        "best_backbone_ablation_drop": max(
+            baseline["accuracy"] - float(row["accuracy"]) for row in ablation_results
+        ),
+        "best_backbone_ablation_tap": max(
+            ablation_results, key=lambda row: baseline["accuracy"] - float(row["accuracy"])
+        )["target"],
         "attribution_examples": len(attribution_results),
     }
 
-    report = _build_report(args, baseline, ablation_results, probe_results, attribution_results)
+    report = _build_report(
+        args,
+        baseline,
+        ablation_results,
+        backbone_probe_results,
+        ablation_results,
+        attribution_results,
+    )
     report_path = output_dir / "report.md"
     report_path.write_text(report, encoding="utf-8")
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
     (output_dir / "baseline.json").write_text(json.dumps(baseline, indent=2, sort_keys=True), encoding="utf-8")
     (output_dir / "ablations.json").write_text(json.dumps(ablation_results, indent=2, sort_keys=True), encoding="utf-8")
-    (output_dir / "linear_probes.json").write_text(json.dumps(probe_results, indent=2, sort_keys=True), encoding="utf-8")
+    (output_dir / "backbone_probes.json").write_text(
+        json.dumps(backbone_probe_results, indent=2, sort_keys=True), encoding="utf-8"
+    )
     (output_dir / "attributions.json").write_text(json.dumps(attribution_results, indent=2, sort_keys=True), encoding="utf-8")
     (output_dir / "analysis.json").write_text(
         json.dumps(
             {
                 "baseline": baseline,
                 "ablations": ablation_results,
-                "linear_probes": probe_results,
+                "backbone_probes": backbone_probe_results,
                 "attributions": attribution_results,
                 "summary": summary,
             },
@@ -846,7 +915,7 @@ def main() -> None:
                 "summary.json",
                 "baseline.json",
                 "ablations.json",
-                "linear_probes.json",
+                "backbone_probes.json",
                 "attributions.json",
                 "analysis.json",
                 "metrics.jsonl",
@@ -860,18 +929,19 @@ def main() -> None:
                 repo_id=args.hub_repo_id,
                 repo_type="model",
                 folder_path=bundle_dir,
-                path_in_repo="no_training_mnist_probe_0707",
-                commit_message="Upload MNIST no-training probe report",
+                path_in_repo="blockwise_mnist_analysis_0707",
+                commit_message="Upload MNIST no-training block analysis report",
             )
 
     if args.hub_only and args.push_to_hub:
         shutil.rmtree(output_dir, ignore_errors=True)
 
     logging.info(
-        "MNIST probe complete: baseline_accuracy=%.4f best_ablation_drop=%.4f best_linear_probe_accuracy=%.4f",
+        "MNIST block analysis complete: baseline_accuracy=%.4f best_ablation_drop=%.4f best_backbone_probe_accuracy=%.4f best_backbone_ablation_drop=%.4f",
         baseline["accuracy"],
         summary["best_ablation_drop"],
-        summary["best_linear_probe_accuracy"],
+        summary["best_backbone_probe_accuracy"],
+        summary["best_backbone_ablation_drop"],
     )
 
 
