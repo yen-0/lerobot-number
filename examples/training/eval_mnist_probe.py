@@ -291,7 +291,8 @@ def _run_backbone_context(
     if zero_stage == "text_final_norm":
         final_hidden = torch.zeros_like(final_hidden)
     activations["text_final_norm"] = masked_mean(final_hidden, prefix_pad_masks)
-    logits = teacher.digit_context_head(activations["text_final_norm"])
+    head_dtype = teacher.digit_context_head[0].weight.dtype
+    logits = teacher.digit_context_head(activations["text_final_norm"].to(dtype=head_dtype))
     return logits, activations
 
 
