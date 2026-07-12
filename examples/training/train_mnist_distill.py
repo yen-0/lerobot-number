@@ -50,7 +50,6 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 from lerobot.utils.utils import init_logging
 
@@ -420,18 +419,13 @@ def main() -> None:
     if args.push_to_hub:
         _make_repo(api, args.hub_repo_id)
 
-    teacher_config = SmolVLAConfig.from_pretrained(
-        args.teacher_repo_id,
-        cache_dir=args.cache_dir,
-        local_files_only=args.local_files_only,
-    )
-    teacher_config.device = teacher_device.type if teacher_device.index is None else str(teacher_device)
     teacher = SmolVLAPolicy.from_pretrained(
         args.teacher_repo_id,
-        config=teacher_config,
         cache_dir=args.cache_dir,
         local_files_only=args.local_files_only,
     )
+    teacher.to(teacher_device)
+    teacher.config.device = teacher_device.type if teacher_device.index is None else str(teacher_device)
     teacher.eval()
     for param in teacher.parameters():
         param.requires_grad_(False)
