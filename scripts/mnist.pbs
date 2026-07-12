@@ -1,9 +1,9 @@
 #!/bin/bash
-#PBS -N mnist_distill
+#PBS -N no_training_mnist_probe_0707
 #PBS -q regular-g
 #PBS -W group_list=gw13
 #PBS -l select=1:ncpus=16:mem=60gb
-#PBS -l walltime=12:00:00
+#PBS -l walltime=04:00:00
 #PBS -j oe
 
 set -euo pipefail
@@ -17,26 +17,12 @@ OUTPUT_DIR_OVERRIDE="${OUTPUT_DIR:-}"
 JOB_NAME_OVERRIDE="${JOB_NAME:-}"
 DEVICE_OVERRIDE="${DEVICE:-}"
 TEACHER_DEVICE_OVERRIDE="${TEACHER_DEVICE:-}"
-STEPS_OVERRIDE="${STEPS:-}"
 BATCH_SIZE_OVERRIDE="${BATCH_SIZE:-}"
-EVAL_BATCH_SIZE_OVERRIDE="${EVAL_BATCH_SIZE:-}"
 NUM_WORKERS_OVERRIDE="${NUM_WORKERS:-}"
-LR_OVERRIDE="${LR:-}"
-WEIGHT_DECAY_OVERRIDE="${WEIGHT_DECAY:-}"
-TEMPERATURE_OVERRIDE="${TEMPERATURE:-}"
-DISTILL_WEIGHT_OVERRIDE="${DISTILL_WEIGHT:-}"
-STUDENT_HIDDEN_DIM_OVERRIDE="${STUDENT_HIDDEN_DIM:-}"
-STUDENT_DROPOUT_OVERRIDE="${STUDENT_DROPOUT:-}"
-SAVE_FREQ_OVERRIDE="${SAVE_FREQ:-}"
-EVAL_FREQ_OVERRIDE="${EVAL_FREQ:-}"
-LOG_FREQ_OVERRIDE="${LOG_FREQ:-}"
 SEED_OVERRIDE="${SEED:-}"
 MNIST_ROOT_OVERRIDE="${MNIST_ROOT:-}"
 CACHE_DIR_OVERRIDE="${CACHE_DIR:-}"
-TRAIN_SUBSET_OVERRIDE="${TRAIN_SUBSET:-}"
-EVAL_SUBSET_OVERRIDE="${EVAL_SUBSET:-}"
 LOCAL_FILES_ONLY_OVERRIDE="${LOCAL_FILES_ONLY:-}"
-AMP_OVERRIDE="${AMP:-}"
 HF_TOKEN_OVERRIDE="${HF_TOKEN:-}"
 PUSH_TO_HUB_OVERRIDE="${PUSH_TO_HUB:-}"
 HUB_ONLY_OVERRIDE="${HUB_ONLY:-}"
@@ -49,31 +35,17 @@ if [[ -f config.shared.env ]]; then
 fi
 
 TEACHER_REPO_ID="${TEACHER_REPO_ID_OVERRIDE:-${TEACHER_REPO_ID:-yen-0/smolvla-so101-digits-0707}}"
-HUB_REPO_ID="${HUB_REPO_ID_OVERRIDE:-${HUB_REPO_ID:-yen-0/mnist-distill-0707}}"
-OUTPUT_DIR="${OUTPUT_DIR_OVERRIDE:-${OUTPUT_DIR:-./outputs/mnist_distill}}"
-JOB_NAME="${JOB_NAME_OVERRIDE:-${JOB_NAME:-mnist_distill}}"
+HUB_REPO_ID="${HUB_REPO_ID_OVERRIDE:-${HUB_REPO_ID:-yen-0/smolvla-0707-no-training-mnist-probe}}"
+OUTPUT_DIR="${OUTPUT_DIR_OVERRIDE:-${OUTPUT_DIR:-./outputs/no_training_mnist_probe_0707}}"
+JOB_NAME="${JOB_NAME_OVERRIDE:-${JOB_NAME:-no_training_mnist_probe_0707}}"
 DEVICE="${DEVICE_OVERRIDE:-${DEVICE:-cuda}}"
 TEACHER_DEVICE="${TEACHER_DEVICE_OVERRIDE:-${TEACHER_DEVICE:-$DEVICE}}"
-STEPS="${STEPS_OVERRIDE:-${STEPS:-10000}}"
-BATCH_SIZE="${BATCH_SIZE_OVERRIDE:-${BATCH_SIZE:-128}}"
-EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE_OVERRIDE:-${EVAL_BATCH_SIZE:-512}}"
+BATCH_SIZE="${BATCH_SIZE_OVERRIDE:-${BATCH_SIZE:-512}}"
 NUM_WORKERS="${NUM_WORKERS_OVERRIDE:-${NUM_WORKERS:-4}}"
-LR="${LR_OVERRIDE:-${LR:-3e-4}}"
-WEIGHT_DECAY="${WEIGHT_DECAY_OVERRIDE:-${WEIGHT_DECAY:-1e-4}}"
-TEMPERATURE="${TEMPERATURE_OVERRIDE:-${TEMPERATURE:-2.0}}"
-DISTILL_WEIGHT="${DISTILL_WEIGHT_OVERRIDE:-${DISTILL_WEIGHT:-0.5}}"
-STUDENT_HIDDEN_DIM="${STUDENT_HIDDEN_DIM_OVERRIDE:-${STUDENT_HIDDEN_DIM:-64}}"
-STUDENT_DROPOUT="${STUDENT_DROPOUT_OVERRIDE:-${STUDENT_DROPOUT:-0.1}}"
-SAVE_FREQ="${SAVE_FREQ_OVERRIDE:-${SAVE_FREQ:-1000}}"
-EVAL_FREQ="${EVAL_FREQ_OVERRIDE:-${EVAL_FREQ:-500}}"
-LOG_FREQ="${LOG_FREQ_OVERRIDE:-${LOG_FREQ:-50}}"
 SEED="${SEED_OVERRIDE:-${SEED:-42}}"
 MNIST_ROOT="${MNIST_ROOT_OVERRIDE:-${MNIST_ROOT:-.cache/mnist}}"
 CACHE_DIR="${CACHE_DIR_OVERRIDE:-${CACHE_DIR:-}}"
-TRAIN_SUBSET="${TRAIN_SUBSET_OVERRIDE:-${TRAIN_SUBSET:-}}"
-EVAL_SUBSET="${EVAL_SUBSET_OVERRIDE:-${EVAL_SUBSET:-}}"
 LOCAL_FILES_ONLY="${LOCAL_FILES_ONLY_OVERRIDE:-${LOCAL_FILES_ONLY:-false}}"
-AMP="${AMP_OVERRIDE:-${AMP:-true}}"
 HF_TOKEN="${HF_TOKEN_OVERRIDE:-${HF_TOKEN:-}}"
 PUSH_TO_HUB="${PUSH_TO_HUB_OVERRIDE:-${PUSH_TO_HUB:-true}}"
 HUB_ONLY="${HUB_ONLY_OVERRIDE:-${HUB_ONLY:-true}}"
@@ -126,7 +98,7 @@ export APPTAINERENV_OPENBLAS_NUM_THREADS="$OPENBLAS_NUM_THREADS"
 export APPTAINERENV_NUMEXPR_NUM_THREADS="$NUMEXPR_NUM_THREADS"
 export APPTAINERENV_PBS_O_WORKDIR="${PBS_O_WORKDIR}"
 
-if [[ -n "${HF_TOKEN:-}" ]]; then
+if [[ -n "${HF_TOKEN}" ]]; then
   export APPTAINERENV_HF_TOKEN="$HF_TOKEN"
 fi
 
@@ -139,19 +111,8 @@ ARGS=(
   --job_name="${JOB_NAME}"
   --device="${DEVICE}"
   --teacher.device="${TEACHER_DEVICE}"
-  --steps="${STEPS}"
   --batch_size="${BATCH_SIZE}"
-  --eval_batch_size="${EVAL_BATCH_SIZE}"
   --num_workers="${NUM_WORKERS}"
-  --lr="${LR}"
-  --weight_decay="${WEIGHT_DECAY}"
-  --temperature="${TEMPERATURE}"
-  --distill_weight="${DISTILL_WEIGHT}"
-  --student_hidden_dim="${STUDENT_HIDDEN_DIM}"
-  --student_dropout="${STUDENT_DROPOUT}"
-  --save_freq="${SAVE_FREQ}"
-  --eval_freq="${EVAL_FREQ}"
-  --log_freq="${LOG_FREQ}"
   --seed="${SEED}"
   --mnist_root="${MNIST_ROOT}"
 )
@@ -162,12 +123,6 @@ fi
 
 if [[ "${LOCAL_FILES_ONLY}" == "true" ]]; then
   ARGS+=(--local_files_only)
-fi
-
-if [[ "${AMP}" == "true" ]]; then
-  ARGS+=(--amp)
-else
-  ARGS+=(--no-amp)
 fi
 
 if [[ "${PUSH_TO_HUB}" == "true" ]]; then
@@ -182,19 +137,11 @@ else
   ARGS+=(--no-hub-only)
 fi
 
-if [[ -n "${TRAIN_SUBSET}" ]]; then
-  ARGS+=(--train_subset="${TRAIN_SUBSET}")
-fi
-
-if [[ -n "${EVAL_SUBSET}" ]]; then
-  ARGS+=(--eval_subset="${EVAL_SUBSET}")
-fi
-
 LOG_DIR="${PBS_O_WORKDIR}/logs"
 mkdir -p "${LOG_DIR}"
-LOG_FILE="${LOG_DIR}/mnist_distill_${PBS_JOBID:-manual}_$(date +%Y%m%d_%H%M%S).log"
+LOG_FILE="${LOG_DIR}/no_training_mnist_probe_0707_${PBS_JOBID:-manual}_$(date +%Y%m%d_%H%M%S).log"
 
-echo "[$(date -Is)] starting MNIST distillation job"
+echo "[$(date -Is)] starting MNIST probe job"
 echo "[$(date -Is)] log file: ${LOG_FILE}"
 echo "[$(date -Is)] args: ${ARGS[*]}"
 
@@ -213,7 +160,7 @@ fi
 
 cleanup() {
   status=$?
-  echo "[$(date -Is)] MNIST distillation job exiting with status ${status}"
+  echo "[$(date -Is)] MNIST probe job exiting with status ${status}"
   if [[ -d "${LOCAL_CACHE}/huggingface" && -n "${SHARED_CACHE_BASE:-}" ]]; then
     mkdir -p "${SHARED_CACHE_BASE}/huggingface"
     rsync -a --exclude='*.lock' "${LOCAL_CACHE}/huggingface/" "${SHARED_CACHE_BASE}/huggingface/"
@@ -226,4 +173,4 @@ apptainer --debug exec --nv \
   --writable-tmpfs \
   --pwd "${PBS_O_WORKDIR}" \
   "${APPTAINER_IMAGE}" \
-  python -u examples/training/train_mnist_distill.py "${ARGS[@]}" 2>&1 | tee -a "${LOG_FILE}"
+  python -u examples/training/eval_mnist_probe.py "${ARGS[@]}" 2>&1 | tee -a "${LOG_FILE}"
