@@ -27,8 +27,10 @@ pytest.importorskip("datasets", reason="datasets is required (install lerobot[da
 from lerobot.configs import VideoEncoderConfig
 from lerobot.datasets.dataset_tools import (
     add_features,
+    blue_mask_image,
     convert_image_to_video_dataset,
     delete_episodes,
+    filter_blue_world_dataset,
     merge_datasets,
     modify_features,
     modify_tasks,
@@ -93,6 +95,63 @@ def test_delete_single_episode(sample_dataset, tmp_path):
     assert episode_indices == {0, 1, 2, 3}
 
     assert len(new_dataset) == 40
+
+
+def test_blue_mask_image_keeps_blue_and_rejects_white():
+    image = np.array(
+        [
+            [[0, 0, 255], [255, 255, 255]],
+            [[128, 128, 128], [255, 0, 0]],
+        ],
+        dtype=np.uint8,
+    )
+
+    filtered = blue_mask_image(image, hue_min=0.55, hue_max=0.75, saturation_min=0.2, value_min=0.05)
+
+    assert filtered[0, 0].tolist() == [0, 0, 255]
+    assert filtered[0, 1].tolist() == [255, 255, 255]
+    assert filtered[1, 0].tolist() == [255, 255, 255]
+    assert filtered[1, 1].tolist() == [255, 255, 255]
+
+
+def test_filter_blue_world_dataset_rewrites_camera_frames(sample_dataset, tmp_path):
+    output_dir = tmp_path / "blue_world"
+
+    with (
+        patch("lerobot.datasets.dataset_metadata.get_safe_version") as mock_get_safe_version,
+        patch("lerobot.datasets.dataset_metadata.snapshot_download") as mock_snapshot_download,
+    ):
+        mock_get_safe_version.return_value = "v3.0"
+        mock_snapshot_download.return_value = str(output_dir)
+
+        filtered_dataset = filter_blue_world_dataset(
+            sample_dataset,
+            output_dir=output_dir,
+            repo_id="test/blue_world",
+            hue_min=0.55,
+            hue_max=0.75,
+            saturation_min=0.2,
+            value_min=0.05,
+        )
+
+    assert filtered_dataset.meta.total_episodes == sample_dataset.meta.total_episodes
+    assert filtered_dataset.meta.total_frames == sample_dataset.meta.total_frames
+    assert filtered_dataset.meta.camera_keys == sample_dataset.meta.camera_keys
+
+    sample = filtered_dataset[0]
+    assert "observation.images.top" in sample
+
+    image = sample["observation.images.top"]
+    if isinstance(image, torch.Tensor):
+        image = image.permute(1, 2, 0).cpu().numpy()
+    else:
+        image = np.asarray(image)
+
+    assert image.shape[-1] == 3
+    flat_pixels = image.reshape(-1, 3)
+    allowed_white = np.all(flat_pixels == np.array([255, 255, 255]), axis=1)
+    allowed_blueish = flat_pixels[:, 2] >= flat_pixels[:, 0]
+    assert np.all(allowed_white | allowed_blueish)
 
 
 def test_delete_multiple_episodes(sample_dataset, tmp_path):

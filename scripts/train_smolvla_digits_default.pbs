@@ -1,0 +1,17 @@
+#!/bin/bash
+#PBS -N smolvla_digits_default
+#PBS -q regular-g
+#PBS -W group_list=gw13
+#PBS -l select=1:ncpus=16:mem=60gb
+#PBS -l walltime=48:00:00
+#PBS -j oe
+
+set -euo pipefail
+
+# Reuse the standard digits training job, but disable the target drawing branch so the
+# policy trains with the default SmolVLA image inputs only.
+export USE_TARGET_DRAWING=false
+export JOB_NAME="${JOB_NAME:-smolvla_digits_default}"
+export OUTPUT_DIR="${OUTPUT_DIR:-./outputs/smolvla_digits_default}"
+
+exec bash "$(dirname "$0")/train_smolvla_digits.pbs"

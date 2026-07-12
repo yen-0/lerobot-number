@@ -29,7 +29,7 @@ def main():
     init_logging(console_level="INFO", file_level="DEBUG")
 
     # Hardcoded parameters
-    src_repo_id = "k1000dai/so101-write"
+    src_repo_id = "yen-0/so101-write-5-kadokawa"
     crop_coords = [386, 60, 642, 238] # x_min y_min x_max y_max
 
     # Load source dataset

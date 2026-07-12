@@ -31,7 +31,7 @@ if [[ -n "${HF_TOKEN:-}" ]]; then
   export APPTAINERENV_HF_TOKEN="${HF_TOKEN}"
 fi
 
-DATASET_REPO="${DATASET_REPO_ID:-k1000dai/so101-write}"
+DATASET_REPO="${DATASET_REPO_ID:-yen-0/so101-write-5-kadokawa}"
 MODEL_REPO="HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
 
 echo "[$(date -Is)] Starting pre-download for dataset: ${DATASET_REPO}"

@@ -1,0 +1,118 @@
+#!/bin/bash
+#PBS -N filter_blue_world
+#PBS -q debug-g
+#PBS -W group_list=gw13
+#PBS -l select=1:ncpus=8:mem=32gb
+#PBS -l walltime=04:00:00
+#PBS -j oe
+
+set -euo pipefail
+
+PBS_O_WORKDIR="${PBS_O_WORKDIR:-$(pwd)}"
+cd "${PBS_O_WORKDIR}"
+
+if [[ -f config.env ]]; then
+  source config.env
+fi
+if [[ -f config.shared.env ]]; then
+  source config.shared.env
+fi
+
+if [[ -z "${HF_TOKEN:-}" || "${HF_TOKEN}" == "hf_YOUR_TOKEN_HERE" ]]; then
+  echo "[WARNING] HF_TOKEN is not set. Put it in ignored config.env if this job needs Hub access." >&2
+else
+  echo "[INFO] HF_TOKEN loaded successfully (starts with: ${HF_TOKEN:0:8}...)"
+fi
+
+if [[ -d "/work/gw13/w13009" ]]; then
+  CACHE_BASE="/work/gw13/w13009/.cache"
+else
+  CACHE_BASE="$HOME/.cache"
+fi
+
+mkdir -p "$CACHE_BASE/huggingface"
+mkdir -p "$CACHE_BASE/huggingface/datasets"
+mkdir -p "$CACHE_BASE/lerobot"
+
+export HF_HOME=$CACHE_BASE/huggingface
+export HF_LEROBOT_HOME=$CACHE_BASE/lerobot
+export HF_DATASETS_CACHE=$CACHE_BASE/huggingface/datasets
+export PYTHONPATH=${PYTHONPATH:-}:$(pwd)/src
+export PYTHONUNBUFFERED=1
+
+export APPTAINERENV_HF_HOME=$HF_HOME
+export APPTAINERENV_HF_LEROBOT_HOME=$HF_LEROBOT_HOME
+export APPTAINERENV_HF_DATASETS_CACHE=$HF_DATASETS_CACHE
+export APPTAINERENV_PYTHONPATH=$PYTHONPATH
+export APPTAINERENV_PYTHONUNBUFFERED=1
+export APPTAINERENV_PBS_O_WORKDIR="$PBS_O_WORKDIR"
+
+if [[ -n "${HF_TOKEN:-}" ]]; then
+  export APPTAINERENV_HF_TOKEN="$HF_TOKEN"
+fi
+
+module load "${APPTAINER_MODULE}"
+
+SOURCE_DATASET_REPO_ID="${SOURCE_DATASET_REPO_ID:-yen-0/so101-write-5-kadokawa}"
+FILTERED_DATASET_REPO_ID="${FILTERED_DATASET_REPO_ID:-yen-0/so101-write-5-kadokawa-blue-world}"
+FILTERED_DATASET_ROOT="${FILTERED_DATASET_ROOT:-}"
+PUSH_TO_HUB="${PUSH_TO_HUB:-true}"
+HUE_MIN="${HUE_MIN:-0.55}"
+HUE_MAX="${HUE_MAX:-0.75}"
+SATURATION_MIN="${SATURATION_MIN:-0.2}"
+VALUE_MIN="${VALUE_MIN:-0.05}"
+EPISODE_INDICES="${EPISODE_INDICES:-}"
+
+ARGS=(
+  --repo_id "${SOURCE_DATASET_REPO_ID}"
+  --new_repo_id "${FILTERED_DATASET_REPO_ID}"
+  --operation.type filter_blue_world
+  --operation.hue_min "${HUE_MIN}"
+  --operation.hue_max "${HUE_MAX}"
+  --operation.saturation_min "${SATURATION_MIN}"
+  --operation.value_min "${VALUE_MIN}"
+)
+
+if [[ -n "${FILTERED_DATASET_ROOT}" ]]; then
+  ARGS+=(--new_root "${FILTERED_DATASET_ROOT}")
+fi
+
+if [[ -n "${EPISODE_INDICES}" ]]; then
+  ARGS+=(--operation.episode_indices "${EPISODE_INDICES}")
+fi
+
+if [[ "${PUSH_TO_HUB}" == "true" ]]; then
+  ARGS+=(--push_to_hub true)
+else
+  ARGS+=(--push_to_hub false)
+fi
+
+LOG_DIR="${PBS_O_WORKDIR}/logs"
+mkdir -p "${LOG_DIR}"
+LOG_FILE="${LOG_DIR}/filter_blue_world_${PBS_JOBID:-manual}_$(date +%Y%m%d_%H%M%S).log"
+
+echo "[$(date -Is)] starting blue-world dataset export"
+echo "[$(date -Is)] log file: ${LOG_FILE}"
+echo "[$(date -Is)] source dataset: ${SOURCE_DATASET_REPO_ID}"
+echo "[$(date -Is)] filtered dataset: ${FILTERED_DATASET_REPO_ID}"
+echo "[$(date -Is)] args: ${ARGS[*]}"
+
+BINDS=(
+  --bind "${PBS_O_WORKDIR}:${PBS_O_WORKDIR}:rw"
+  --bind "$HOME:$HOME:rw"
+)
+
+if [[ -d "/work/gw13" ]]; then
+  BINDS+=(--bind "/work/gw13:/work/gw13:rw")
+fi
+
+if [[ "${CACHE_BASE}" != "$HOME/.cache" ]]; then
+  BINDS+=(--bind "${CACHE_BASE}:${CACHE_BASE}:rw")
+fi
+
+apptainer exec \
+  "${BINDS[@]}" \
+  --writable-tmpfs \
+  --pwd "${PBS_O_WORKDIR}" \
+  "${APPTAINER_IMAGE}" \
+  python -u src/lerobot/scripts/lerobot_edit_dataset.py "${ARGS[@]}" 2>&1 | tee -a "${LOG_FILE}"

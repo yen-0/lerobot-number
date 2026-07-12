@@ -79,6 +79,13 @@ class SmolVLAConfig(PreTrainedConfig):
     digit_alignment_loss_weight: float = 0.25
     digit_reference_temperature: float = 0.07
 
+    # Blue-world preprocessing for inference-time color filtering.
+    blue_world_filter: bool = False
+    blue_world_hue_min: float = 0.55
+    blue_world_hue_max: float = 0.75
+    blue_world_saturation_min: float = 0.2
+    blue_world_value_min: float = 0.05
+
     # Training presets
     optimizer_lr: float = 1e-4
     optimizer_betas: tuple[float, float] = (0.9, 0.95)

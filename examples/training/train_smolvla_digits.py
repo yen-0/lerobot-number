@@ -19,17 +19,21 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import faulthandler
 import json
 import logging
 import os
+import shutil
 import signal
 import sys
 import time
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import torch
 from datasets import load_dataset
+from huggingface_hub import HfApi
 from torchvision.datasets import MNIST
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -55,7 +59,7 @@ from lerobot.utils.utils import init_logging
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset.repo_id", dest="dataset_repo_id", default="k1000dai/so101-write")
+    parser.add_argument("--dataset.repo_id", dest="dataset_repo_id", default="yen-0/so101-write-5-kadokawa")
     parser.add_argument("--output_dir", default="outputs/train/smolvla_so101_digits")
     parser.add_argument("--job_name", default="smolvla_so101_digits")
     parser.add_argument("--policy.device", dest="device", default="cuda")
@@ -67,9 +71,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mnist_examples_per_digit", type=int, default=64)
     parser.add_argument("--mnist_cache_dir", default=None)
     parser.add_argument("--use-mnist", dest="use_mnist", action=argparse.BooleanOptionalAction, default=False, help="Whether to use MNIST reference images for auxiliary supervision")
+    parser.add_argument(
+        "--use-target-drawing",
+        dest="use_target_drawing",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether to inject the target drawing image as an additional visual observation branch",
+    )
+    parser.add_argument(
+        "--policy.blue_world_filter",
+        dest="blue_world_filter",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Whether to filter live camera observations to blue pixels on a white background",
+    )
     parser.add_argument("--digit_map", default=None)
     parser.add_argument("--policy.repo_id", dest="policy_repo_id", default=None)
     parser.add_argument("--push_to_hub", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--hub_only",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Upload checkpoints/final artifacts to Hugging Face without persisting them in output_dir",
+    )
     parser.add_argument("--streaming", action="store_true", help="Stream the dataset from Hub instead of caching it locally")
     parser.add_argument("--resume", action="store_true", help="Auto-resume from the latest checkpoint in output_dir if it exists")
     parser.add_argument("--policy.gradient_checkpointing", dest="gradient_checkpointing", action=argparse.BooleanOptionalAction, default=True, help="Enable gradient checkpointing to reduce VRAM usage")
@@ -126,6 +150,12 @@ def _resolve_output_path(path: str) -> Path:
     if output_path.is_absolute():
         return output_path
     return _resolve_workdir() / output_path
+
+
+def _build_export_config(config: SmolVLAConfig) -> SmolVLAConfig:
+    """Build the config that will be serialized with the exported policy."""
+
+    return copy.deepcopy(config)
 
 
 def log_memory_usage(stage: str) -> None:
@@ -290,7 +320,6 @@ def _install_diagnostics(dump_interval_s: int) -> None:
 
 
 def free_checkpoint_space(output_dir: Path, required_space_gb: float = 10.0) -> None:
-    import shutil
     try:
         total, used, free = shutil.disk_usage(output_dir)
         free_gb = free / (1024**3)
@@ -380,6 +409,13 @@ def main() -> None:
             "--policy.repo_id is required when --push_to_hub is enabled (which is the default). "
             "Use --no-push-to-hub to disable pushing to the Hugging Face Hub."
         )
+    if args.hub_only:
+        if not args.push_to_hub:
+            raise ValueError("--hub_only requires --push_to_hub.")
+        if not args.policy_repo_id:
+            raise ValueError("--hub_only requires --policy.repo_id.")
+        if args.resume:
+            raise ValueError("--hub_only cannot be combined with --resume because no local checkpoints are kept.")
     init_logging(console_level="INFO", file_level="DEBUG")
     _install_diagnostics(args.diagnostic_dump_interval)
     start_time = time.time()
@@ -435,11 +471,12 @@ def main() -> None:
     digit_map = load_digit_map(args.digit_map)
     logging.info("Digit map entries: %d", len(digit_map))
     features = dataset_to_policy_features(dataset_metadata.features)
-    # Manually inject target_drawing as a visual feature
-    features["observation.target_drawing"] = PolicyFeature(
-        type=FeatureType.VISUAL,
-        shape=(3, 178, 256)
-    )
+    if args.use_target_drawing:
+        # Manually inject target_drawing as a visual feature when the extra goal-image branch is enabled.
+        features["observation.target_drawing"] = PolicyFeature(
+            type=FeatureType.VISUAL,
+            shape=(3, 178, 256),
+        )
     output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
     input_features = {key: ft for key, ft in features.items() if key not in output_features}
 
@@ -451,8 +488,10 @@ def main() -> None:
         train_expert_only=args.train_expert_only,
         digit_alignment_loss_weight=0.25,
         digit_classification_loss_weight=1.0,
+        blue_world_filter=args.blue_world_filter,
         gradient_checkpointing=args.gradient_checkpointing,
     )
+    export_config = _build_export_config(config)
 
     if checkpoint_dir is not None:
         logging.info("Resuming policy from checkpoint: %s", checkpoint_dir)
@@ -467,6 +506,11 @@ def main() -> None:
 
     preprocessor, postprocessor = make_smolvla_pre_post_processors(
         config,
+        dataset_stats=dataset_metadata.stats,
+        digit_map=digit_map,
+    )
+    export_preprocessor, export_postprocessor = make_smolvla_pre_post_processors(
+        export_config,
         dataset_stats=dataset_metadata.stats,
         digit_map=digit_map,
     )
@@ -551,25 +595,63 @@ def main() -> None:
                 exc,
             )
             logging.warning("Continuing with a fresh optimizer state for the resumed model weights.")
-    step = start_step
-    # Load target drawings for all episodes into RAM (Approach B)
-    logging.info("Loading target drawings for all episodes into RAM...")
-    target_drawings_dir = Path("outputs/target_drawings")
-    from PIL import Image
-    import numpy as np
-    target_drawings = []
-    for ep_idx in range(dataset_metadata.total_episodes):
-        img_path = target_drawings_dir / f"episode_{ep_idx}.png"
-        if not img_path.exists():
-            raise FileNotFoundError(
-                f"Missing target drawing for episode {ep_idx} at {img_path}. "
-                "Please run `qsub scripts/extract_patterns.pbs` (or local equivalent) first."
+
+    def _save_exportable_artifacts(save_dir: Path) -> None:
+        """Write the inference-safe policy bundle used by `eval.sh`."""
+
+        original_policy_config = policy.config
+        try:
+            policy.config = export_config
+            policy.save_pretrained(save_dir)
+        finally:
+            policy.config = original_policy_config
+
+        export_preprocessor.save_pretrained(save_dir)
+        export_postprocessor.save_pretrained(save_dir)
+
+    def upload_checkpoint_to_hub(local_checkpoint_dir: Path, step: int) -> None:
+        if not args.push_to_hub or not args.policy_repo_id:
+            return
+        api = HfApi()
+        api.create_repo(repo_id=args.policy_repo_id, repo_type="model", exist_ok=True)
+
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+            tmp_root = Path(tmpdir) / "checkpoints"
+            step_dir = tmp_root / f"checkpoint-{step}"
+            shutil.copytree(local_checkpoint_dir, step_dir)
+            shutil.copytree(local_checkpoint_dir, tmp_root / "last")
+            api.upload_folder(
+                repo_id=args.policy_repo_id,
+                repo_type="model",
+                folder_path=tmp_root,
+                path_in_repo="checkpoints",
+                commit_message=f"Upload checkpoint at step {step}",
             )
-        img_pil = Image.open(img_path).convert("RGB")
-        img_np = np.array(img_pil, dtype=np.float32) / 255.0
-        img_tensor = torch.from_numpy(img_np).permute(2, 0, 1) # (C, H, W)
-        target_drawings.append(img_tensor)
-    logging.info("Loaded %d target drawings successfully.", len(target_drawings))
+
+    step = start_step
+    target_drawings = None
+    if args.use_target_drawing:
+        # Load target drawings for all episodes into RAM (Approach B)
+        logging.info("Loading target drawings for all episodes into RAM...")
+        target_drawings_dir = Path("outputs/target_drawings")
+        from PIL import Image
+        import numpy as np
+
+        target_drawings = []
+        for ep_idx in range(dataset_metadata.total_episodes):
+            img_path = target_drawings_dir / f"episode_{ep_idx}.png"
+            if not img_path.exists():
+                raise FileNotFoundError(
+                    f"Missing target drawing for episode {ep_idx} at {img_path}. "
+                    "Please run `qsub scripts/extract_patterns.pbs` (or local equivalent) first."
+                )
+            img_pil = Image.open(img_path).convert("RGB")
+            img_np = np.array(img_pil, dtype=np.float32) / 255.0
+            img_tensor = torch.from_numpy(img_np).permute(2, 0, 1)  # (C, H, W)
+            target_drawings.append(img_tensor)
+        logging.info("Loaded %d target drawings successfully.", len(target_drawings))
+    else:
+        logging.info("Target drawing branch disabled. Training with default SmolVLA image inputs only.")
 
     last_log_time = time.time()
     dataloader_iter = iter(dataloader)
@@ -601,10 +683,13 @@ def main() -> None:
                         "[Diagnosis Warning] Dataloader fetch took %.2fs! This could indicate slow disk I/O or network filesystem mount issues.",
                         fetch_time
                     )
-                # Inject observation.target_drawing into raw_batch (Approach B)
-                ep_indices = raw_batch["episode_index"].view(-1).cpu().tolist()
-                batch_targets = torch.stack([target_drawings[ep_idx] for ep_idx in ep_indices])
-                raw_batch["observation.target_drawing"] = batch_targets
+                if args.use_target_drawing:
+                    # Inject observation.target_drawing into raw_batch (Approach B)
+                    if target_drawings is None:
+                        raise RuntimeError("Target drawing branch enabled but target drawings were not loaded.")
+                    ep_indices = raw_batch["episode_index"].view(-1).cpu().tolist()
+                    batch_targets = torch.stack([target_drawings[ep_idx] for ep_idx in ep_indices])
+                    raw_batch["observation.target_drawing"] = batch_targets
             except StopIteration:
                 logging.info("Dataloader exhausted, restarting iterator")
                 dataloader_iter = iter(dataloader)
@@ -729,10 +814,12 @@ def main() -> None:
                         tmp_checkpoint_dir = output_dir / f".checkpoint-{step}.tmp"
 
                         def _do_save():
-                            logging.info("Saving checkpoint to %s", checkpoint_dir)
+                            if args.hub_only:
+                                logging.info("Saving checkpoint to a temporary staging directory for Hub upload")
+                            else:
+                                logging.info("Saving checkpoint to %s", checkpoint_dir)
                             log_memory_usage("Start checkpoint saving")
                             if tmp_checkpoint_dir.exists():
-                                import shutil
                                 shutil.rmtree(tmp_checkpoint_dir)
                             tmp_checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -742,13 +829,9 @@ def main() -> None:
                             torch.cuda.empty_cache()
                             log_memory_usage("After moving policy to CPU")
 
-                            logging.info("Saving policy weights...")
-                            policy.save_pretrained(tmp_checkpoint_dir)
+                            logging.info("Saving inference-safe policy bundle...")
+                            _save_exportable_artifacts(tmp_checkpoint_dir)
                             log_memory_usage("After saving policy weights")
-
-                            logging.info("Saving preprocessor and postprocessor configs...")
-                            preprocessor.save_pretrained(tmp_checkpoint_dir)
-                            postprocessor.save_pretrained(tmp_checkpoint_dir)
 
                             # Move optimizer state dict to CPU before saving to prevent OOM
                             logging.info("Extracting optimizer state dict...")
@@ -756,7 +839,6 @@ def main() -> None:
                             log_memory_usage("After opt_state_dict extraction")
 
                             logging.info("Deepcopying and offloading optimizer state dict to CPU...")
-                            import copy
                             opt_state_dict_cpu = copy.deepcopy(opt_state_dict)
                             for param_id, param_state in opt_state_dict_cpu.get("state", {}).items():
                                 for k, v in param_state.items():
@@ -775,12 +857,16 @@ def main() -> None:
                             torch.cuda.empty_cache()
                             log_memory_usage("After restoring policy to device")
 
-                            # Atomic rename
-                            logging.info("Renaming temporary checkpoint directory to %s", checkpoint_dir)
-                            if checkpoint_dir.exists():
-                                import shutil
-                                shutil.rmtree(checkpoint_dir)
-                            tmp_checkpoint_dir.rename(checkpoint_dir)
+                            if args.hub_only:
+                                logging.info("Uploading checkpoint %s to the Hub", step)
+                                upload_checkpoint_to_hub(tmp_checkpoint_dir, step)
+                                shutil.rmtree(tmp_checkpoint_dir)
+                            else:
+                                # Atomic rename
+                                logging.info("Renaming temporary checkpoint directory to %s", checkpoint_dir)
+                                if checkpoint_dir.exists():
+                                    shutil.rmtree(checkpoint_dir)
+                                tmp_checkpoint_dir.rename(checkpoint_dir)
                             logging.info("Checkpoint saved successfully at step %d", step)
 
                         try:
@@ -829,27 +915,33 @@ def main() -> None:
     finally:
         monitor.stop()
 
-    logging.info("Saving final artifacts to %s", output_dir)
+    if args.hub_only:
+        logging.info("Skipping final local artifact save because --hub_only is enabled")
+    else:
+        logging.info("Saving final artifacts to %s", output_dir)
     log_memory_usage("Start final artifacts save")
     logging.info("Moving policy to CPU...")
     policy.to("cpu")
     torch.cuda.empty_cache()
-    log_memory_usage("After moving policy to CPU for final save")
-    logging.info("Saving policy weights...")
-    policy.save_pretrained(output_dir)
-    log_memory_usage("After saving policy weights for final save")
-    logging.info("Saving preprocessor and postprocessor configs...")
-    preprocessor.save_pretrained(output_dir)
-    postprocessor.save_pretrained(output_dir)
-    log_memory_usage("Completed final artifacts save")
+    if not args.hub_only:
+        log_memory_usage("After moving policy to CPU for final save")
+        logging.info("Saving inference-safe policy bundle...")
+        _save_exportable_artifacts(output_dir)
+        log_memory_usage("After saving policy weights for final save")
+        log_memory_usage("Completed final artifacts save")
 
     if args.push_to_hub:
         if not args.policy_repo_id:
             raise ValueError("--policy.repo_id is required when --push_to_hub is enabled")
         logging.info("Pushing artifacts to the Hub: %s", args.policy_repo_id)
-        policy.push_to_hub(args.policy_repo_id)
-        preprocessor.push_to_hub(args.policy_repo_id)
-        postprocessor.push_to_hub(args.policy_repo_id)
+        original_policy_config = policy.config
+        try:
+            policy.config = export_config
+            policy.push_to_hub(args.policy_repo_id)
+        finally:
+            policy.config = original_policy_config
+        export_preprocessor.push_to_hub(args.policy_repo_id)
+        export_postprocessor.push_to_hub(args.policy_repo_id)
 
     logging.info("Training complete in %.1fs", time.time() - start_time)
 

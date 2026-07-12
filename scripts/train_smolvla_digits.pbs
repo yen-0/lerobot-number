@@ -20,6 +20,9 @@ if [[ -f config.shared.env ]]; then
   source config.shared.env
 fi
 
+HUB_ONLY="true"
+PUSH_TO_HUB="true"
+
 if [[ -z "${HF_TOKEN:-}" || "${HF_TOKEN}" == "hf_YOUR_TOKEN_HERE" ]]; then
   echo "[WARNING] HF_TOKEN is not set. Put it in ignored config.env if this job needs private Hub access." >&2
 else
@@ -91,7 +94,7 @@ fi
 module load "${APPTAINER_MODULE}"
 
 ARGS=(
-  --dataset.repo_id="${DATASET_REPO_ID:-k1000dai/so101-write}"
+  --dataset.repo_id="${DATASET_REPO_ID:-yen-0/so101-write-5-kadokawa}"
   --output_dir="${OUTPUT_DIR:-./outputs/smolvla_digits}"
   --job_name="${JOB_NAME:-smolvla_digits}"
   --policy.device="${DEVICE:-cuda}"
@@ -102,9 +105,14 @@ ARGS=(
   --save_freq="${SAVE_FREQ:-5000}"
   --heartbeat_timeout="${HEARTBEAT_TIMEOUT:-300}"
   --diagnostic_dump_interval="${DIAGNOSTIC_DUMP_INTERVAL:-300}"
-  --resume
   --gradient_accumulation_steps="${GRADIENT_ACCUMULATION_STEPS:-1}"
 )
+
+if [[ "${HUB_ONLY:-true}" == "true" ]]; then
+  ARGS+=(--hub_only)
+elif [[ "${RESUME:-true}" == "true" ]]; then
+  ARGS+=(--resume)
+fi
 
 if [[ "${FREEZE_VISION_ENCODER:-false}" == "true" ]]; then
   ARGS+=(--policy.freeze_vision_encoder)
@@ -128,6 +136,18 @@ if [[ "${USE_MNIST:-false}" == "true" ]]; then
   ARGS+=(--use-mnist)
 else
   ARGS+=(--no-use-mnist)
+fi
+
+if [[ "${USE_TARGET_DRAWING:-true}" == "true" ]]; then
+  ARGS+=(--use-target-drawing)
+else
+  ARGS+=(--no-use-target-drawing)
+fi
+
+if [[ "${BLUE_WORLD_FILTER:-false}" == "true" ]]; then
+  ARGS+=(--policy.blue_world_filter)
+else
+  ARGS+=(--no-policy.blue_world_filter)
 fi
 
 if [[ -n "${MNIST_CACHE_DIR:-}" ]]; then

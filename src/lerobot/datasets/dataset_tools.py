@@ -72,6 +72,87 @@ from .video_utils import (
 )
 
 
+def _ensure_hwc_uint8_image(image: torch.Tensor | np.ndarray) -> np.ndarray:
+    """Convert a decoded dataset image to HWC uint8."""
+    if isinstance(image, torch.Tensor):
+        array = image.detach().cpu().numpy()
+    else:
+        array = np.asarray(image)
+
+    if array.ndim != 3:
+        raise ValueError(f"Expected image with 3 dimensions, got shape {array.shape}")
+
+    if array.shape[0] in {1, 3} and array.shape[-1] not in {1, 3}:
+        array = np.moveaxis(array, 0, -1)
+
+    if array.shape[-1] != 3:
+        raise ValueError(f"Expected RGB image with 3 channels, got shape {array.shape}")
+
+    if np.issubdtype(array.dtype, np.floating):
+        if array.max() <= 1.0:
+            array = array * 255.0
+        array = np.clip(array, 0.0, 255.0).astype(np.uint8)
+    else:
+        array = np.clip(array, 0, 255).astype(np.uint8)
+
+    return array
+
+
+def _rgb_to_hsv(image: np.ndarray) -> np.ndarray:
+    """Convert an HWC uint8 RGB image to HSV in [0, 1]."""
+    rgb = image.astype(np.float32) / 255.0
+    r = rgb[..., 0]
+    g = rgb[..., 1]
+    b = rgb[..., 2]
+
+    maxc = np.max(rgb, axis=-1)
+    minc = np.min(rgb, axis=-1)
+    delta = maxc - minc
+
+    hue = np.zeros_like(maxc)
+    saturation = np.zeros_like(maxc)
+    value = maxc
+
+    nonzero = delta > 0
+    saturation[maxc > 0] = delta[maxc > 0] / maxc[maxc > 0]
+
+    r_mask = nonzero & (maxc == r)
+    g_mask = nonzero & (maxc == g)
+    b_mask = nonzero & (maxc == b)
+
+    hue[r_mask] = np.mod((g[r_mask] - b[r_mask]) / delta[r_mask], 6.0)
+    hue[g_mask] = ((b[g_mask] - r[g_mask]) / delta[g_mask]) + 2.0
+    hue[b_mask] = ((r[b_mask] - g[b_mask]) / delta[b_mask]) + 4.0
+    hue = (hue / 6.0) % 1.0
+
+    return np.stack((hue, saturation, value), axis=-1)
+
+
+def blue_mask_image(
+    image: torch.Tensor | np.ndarray,
+    hue_min: float = 0.55,
+    hue_max: float = 0.75,
+    saturation_min: float = 0.2,
+    value_min: float = 0.05,
+) -> np.ndarray:
+    """Keep only blue pixels and replace everything else with white."""
+    image_hwc = _ensure_hwc_uint8_image(image)
+    hsv = _rgb_to_hsv(image_hwc)
+    hue = hsv[..., 0]
+    saturation = hsv[..., 1]
+    value = hsv[..., 2]
+
+    if hue_min <= hue_max:
+        hue_mask = (hue >= hue_min) & (hue <= hue_max)
+    else:
+        hue_mask = (hue >= hue_min) | (hue <= hue_max)
+
+    blue_mask = hue_mask & (saturation >= saturation_min) & (value >= value_min)
+    filtered = np.full_like(image_hwc, 255, dtype=np.uint8)
+    filtered[blue_mask] = image_hwc[blue_mask]
+    return filtered
+
+
 def _load_episode_with_stats(src_dataset: LeRobotDataset, episode_idx: int) -> dict:
     """Load a single episode's metadata including stats from parquet file.
 
@@ -1894,6 +1975,105 @@ def convert_image_to_video_dataset(
     logging.info(f"New dataset saved to: {output_dir}")
 
     # Return new dataset
+    return LeRobotDataset(repo_id=repo_id, root=output_dir)
+
+
+def filter_blue_world_dataset(
+    dataset: LeRobotDataset,
+    output_dir: Path | None = None,
+    repo_id: str | None = None,
+    episode_indices: list[int] | None = None,
+    hue_min: float = 0.55,
+    hue_max: float = 0.75,
+    saturation_min: float = 0.2,
+    value_min: float = 0.05,
+) -> LeRobotDataset:
+    """Export a dataset where only blue pixels remain and the rest become white."""
+    if repo_id is None:
+        repo_id = f"{dataset.repo_id}_blue_world"
+    output_dir = Path(output_dir) if output_dir is not None else HF_LEROBOT_HOME / repo_id
+
+    if episode_indices is not None:
+        if len(episode_indices) == 0:
+            raise ValueError("No episodes to filter")
+        selected_episodes = set(episode_indices)
+        invalid = selected_episodes - set(range(dataset.meta.total_episodes))
+        if invalid:
+            raise ValueError(f"Invalid episode indices: {sorted(invalid)}")
+    else:
+        selected_episodes = None
+
+    camera_keys = list(dataset.meta.camera_keys)
+    if not camera_keys:
+        raise ValueError(f"No camera keys found in dataset {dataset.repo_id}")
+
+    logging.info(
+        "Filtering dataset %s into blue-only world (hue_min=%.3f, hue_max=%.3f, saturation_min=%.3f, value_min=%.3f)",
+        dataset.repo_id,
+        hue_min,
+        hue_max,
+        saturation_min,
+        value_min,
+    )
+
+    new_dataset = LeRobotDataset.create(
+        repo_id=repo_id,
+        fps=dataset.meta.fps,
+        features=dataset.meta.features,
+        root=output_dir,
+        robot_type=dataset.meta.robot_type,
+        use_videos=len(dataset.meta.video_keys) > 0,
+        tolerance_s=dataset.tolerance_s,
+        batch_encoding_size=dataset._batch_encoding_size,
+        encoder_threads=dataset._encoder_threads,
+        video_files_size_in_mb=dataset.meta.video_files_size_in_mb,
+        data_files_size_in_mb=dataset.meta.data_files_size_in_mb,
+    )
+
+    current_episode = None
+    processed_frames = 0
+    try:
+        for idx in tqdm(range(len(dataset)), desc="Filtering dataset frames"):
+            item = dataset[idx]
+            episode_index = int(item["episode_index"])
+            if selected_episodes is not None and episode_index not in selected_episodes:
+                continue
+
+            if current_episode is None:
+                current_episode = episode_index
+            elif episode_index != current_episode:
+                new_dataset.save_episode()
+                current_episode = episode_index
+
+            frame = {"task": item["task"]}
+            for key in dataset.meta.features:
+                value = item[key]
+                if key in camera_keys:
+                    frame[key] = blue_mask_image(
+                        value,
+                        hue_min=hue_min,
+                        hue_max=hue_max,
+                        saturation_min=saturation_min,
+                        value_min=value_min,
+                    )
+                else:
+                    frame[key] = value
+
+            new_dataset.add_frame(frame)
+            processed_frames += 1
+
+        if new_dataset.has_pending_frames():
+            new_dataset.save_episode()
+    finally:
+        new_dataset.finalize()
+
+    logging.info(
+        "Created blue-world dataset %s at %s with %d episodes and %d filtered frames",
+        repo_id,
+        output_dir,
+        new_dataset.meta.total_episodes,
+        processed_frames,
+    )
     return LeRobotDataset(repo_id=repo_id, root=output_dir)
 
 

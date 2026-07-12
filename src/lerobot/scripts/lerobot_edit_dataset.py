@@ -20,7 +20,8 @@ Edit LeRobot datasets using various transformation tools.
 Requires: pip install 'lerobot[dataset]'
 
 This script allows you to delete episodes, split datasets, merge datasets,
-remove features, modify tasks, recompute stats, and convert image datasets to video format.
+remove features, modify tasks, recompute stats, convert image datasets to video format,
+and export blue-only filtered datasets.
 When new_repo_id is specified, creates a new dataset.
 
 Path semantics (v2): --root and --new_root are exact dataset folders containing
@@ -230,6 +231,7 @@ from lerobot.datasets import (
     LeRobotDataset,
     convert_image_to_video_dataset,
     delete_episodes,
+    filter_blue_world_dataset,
     merge_datasets,
     modify_tasks,
     recompute_stats,
@@ -303,6 +305,16 @@ class RecomputeStatsConfig(OperationConfig):
     chunk_size: int = 50
     num_workers: int = 0
     overwrite: bool = False
+
+
+@OperationConfig.register_subclass("filter_blue_world")
+@dataclass
+class FilterBlueWorldConfig(OperationConfig):
+    episode_indices: list[int] | None = None
+    hue_min: float = 0.55
+    hue_max: float = 0.75
+    saturation_min: float = 0.2
+    value_min: float = 0.05
 
 
 @OperationConfig.register_subclass("reencode_videos")
@@ -682,6 +694,46 @@ def handle_recompute_stats(cfg: EditDatasetConfig) -> None:
         dataset.push_to_hub()
 
 
+def handle_filter_blue_world(cfg: EditDatasetConfig) -> None:
+    if not isinstance(cfg.operation, FilterBlueWorldConfig):
+        raise ValueError("Operation config must be FilterBlueWorldConfig")
+
+    dataset = LeRobotDataset(cfg.repo_id, root=cfg.root)
+    output_repo_id, output_root = get_output_path(
+        cfg.repo_id,
+        new_repo_id=cfg.new_repo_id,
+        root=cfg.root,
+        new_root=cfg.new_root,
+    )
+
+    if output_root == dataset.root:
+        backup_root = dataset.root.with_name(dataset.root.name + "_old")
+        dataset.root = backup_root
+        dataset.meta.root = backup_root
+        if dataset.reader is not None:
+            dataset.reader.root = backup_root
+
+    filtered_dataset = filter_blue_world_dataset(
+        dataset=dataset,
+        output_dir=output_root,
+        repo_id=output_repo_id,
+        episode_indices=cfg.operation.episode_indices,
+        hue_min=cfg.operation.hue_min,
+        hue_max=cfg.operation.hue_max,
+        saturation_min=cfg.operation.saturation_min,
+        value_min=cfg.operation.value_min,
+    )
+
+    logging.info(f"Blue-world dataset saved to {output_root}")
+    logging.info(
+        f"Episodes: {filtered_dataset.meta.total_episodes}, Frames: {filtered_dataset.meta.total_frames}"
+    )
+
+    if cfg.push_to_hub:
+        logging.info(f"Pushing to hub as {output_repo_id}...")
+        filtered_dataset.push_to_hub()
+
+
 def handle_reencode_videos(cfg: EditDatasetConfig) -> None:
     if not isinstance(cfg.operation, ReencodeVideosConfig):
         raise ValueError("Operation config must be ReencodeVideosConfig")
@@ -807,6 +859,8 @@ def edit_dataset(cfg: EditDatasetConfig) -> None:
         handle_convert_image_to_video(cfg)
     elif operation_type == "recompute_stats":
         handle_recompute_stats(cfg)
+    elif operation_type == "filter_blue_world":
+        handle_filter_blue_world(cfg)
     elif operation_type == "reencode_videos":
         handle_reencode_videos(cfg)
     elif operation_type == "info":

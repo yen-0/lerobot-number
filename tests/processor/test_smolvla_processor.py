@@ -17,12 +17,18 @@
 
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 import torch
 
 from lerobot.configs.types import FeatureType, NormalizationMode, PipelineFeatureType, PolicyFeature
 from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
-from lerobot.policies.smolvla.processor_smolvla import make_smolvla_pre_post_processors
+from lerobot.policies.smolvla.processor_smolvla import (
+    SmolVLADigitLabelProcessorStep,
+    SmolVLAGoalImageProcessorStep,
+    SmolVLABlueWorldProcessorStep,
+    make_smolvla_pre_post_processors,
+)
 from lerobot.processor import (
     AddBatchDimensionProcessorStep,
     DeviceProcessorStep,
@@ -103,18 +109,88 @@ def test_make_smolvla_processor_basic():
     assert postprocessor.name == "policy_postprocessor"
 
     # Check steps in preprocessor
-    assert len(preprocessor.steps) == 6
+    assert len(preprocessor.steps) == 8
     assert isinstance(preprocessor.steps[0], RenameObservationsProcessorStep)
-    assert isinstance(preprocessor.steps[1], AddBatchDimensionProcessorStep)
-    assert isinstance(preprocessor.steps[2], NewLineTaskProcessorStep)
-    # Step 3 would be TokenizerProcessorStep but it's mocked
-    assert isinstance(preprocessor.steps[4], DeviceProcessorStep)
-    assert isinstance(preprocessor.steps[5], NormalizerProcessorStep)
+    assert isinstance(preprocessor.steps[1], SmolVLAGoalImageProcessorStep)
+    assert isinstance(preprocessor.steps[2], AddBatchDimensionProcessorStep)
+    assert isinstance(preprocessor.steps[3], SmolVLADigitLabelProcessorStep)
+    assert isinstance(preprocessor.steps[4], NewLineTaskProcessorStep)
+    # Step 5 would be TokenizerProcessorStep but it's mocked
+    assert isinstance(preprocessor.steps[5], MockTokenizerProcessorStep)
+    assert isinstance(preprocessor.steps[6], DeviceProcessorStep)
+    assert isinstance(preprocessor.steps[7], NormalizerProcessorStep)
 
     # Check steps in postprocessor
     assert len(postprocessor.steps) == 2
     assert isinstance(postprocessor.steps[0], UnnormalizerProcessorStep)
     assert isinstance(postprocessor.steps[1], DeviceProcessorStep)
+
+
+def test_make_smolvla_processor_blue_world_adds_filter_step():
+    config = create_default_config()
+    config.blue_world_filter = True
+    stats = create_default_stats()
+
+    with patch(
+        "lerobot.policies.smolvla.processor_smolvla.TokenizerProcessorStep", MockTokenizerProcessorStep
+    ):
+        preprocessor, _ = make_smolvla_pre_post_processors(
+            config,
+            stats,
+        )
+
+    assert any(isinstance(step, SmolVLABlueWorldProcessorStep) for step in preprocessor.steps)
+
+
+def test_smolvla_goal_image_processor_uses_target_drawing_path(tmp_path, monkeypatch):
+    target_path = tmp_path / "target.png"
+    image = np.zeros((2, 2, 3), dtype=np.uint8)
+    image[0, 0] = [0, 0, 255]
+    image[0, 1] = [255, 255, 255]
+    from PIL import Image
+
+    Image.fromarray(image).save(target_path)
+    monkeypatch.setenv("TARGET_DRAWING_PATH", str(target_path))
+
+    step = SmolVLAGoalImageProcessorStep()
+    processed = step.observation({})
+
+    loaded = processed["observation.target_drawing"]
+    assert isinstance(loaded, torch.Tensor)
+    assert loaded.shape == (3, 2, 2)
+    assert torch.equal(loaded[:, 0, 0], torch.tensor([0.0, 0.0, 1.0]))
+    assert torch.equal(loaded[:, 0, 1], torch.tensor([1.0, 1.0, 1.0]))
+
+
+def test_smolvla_blue_world_processor_filters_camera_observation():
+    step = SmolVLABlueWorldProcessorStep()
+    batch = np.array(
+        [
+            [
+                [[0, 0, 255], [255, 0, 0]],
+                [[0, 255, 0], [255, 255, 255]],
+            ],
+            [
+                [[255, 0, 0], [0, 0, 255]],
+                [[255, 255, 255], [0, 255, 0]],
+            ],
+        ],
+        dtype=np.uint8,
+    )
+    observation = {
+        "observation.images.front": batch,
+        "observation.target_drawing": torch.ones(2, 3, 2, 2),
+    }
+
+    processed = step.observation(observation)
+    filtered = processed["observation.images.front"].cpu().numpy()
+
+    assert filtered.shape == (2, 3, 2, 2)
+    assert np.allclose(filtered[0, :, 0, 0], [0.0, 0.0, 1.0])
+    assert np.allclose(filtered[0, :, 0, 1], [1.0, 1.0, 1.0])
+    assert np.allclose(filtered[1, :, 0, 0], [1.0, 1.0, 1.0])
+    assert np.allclose(filtered[1, :, 0, 1], [0.0, 0.0, 1.0])
+    assert torch.equal(processed["observation.target_drawing"], torch.ones(2, 3, 2, 2))
 
 
 def test_smolvla_newline_processor_single_task():

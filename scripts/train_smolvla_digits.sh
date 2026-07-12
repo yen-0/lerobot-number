@@ -15,7 +15,7 @@ if [[ -n "${HF_TOKEN:-}" ]]; then
   export HF_TOKEN
 fi
 
-DATASET_REPO_ID="${DATASET_REPO_ID:-k1000dai/so101-write}"
+DATASET_REPO_ID="${DATASET_REPO_ID:-yen-0/so101-write-5-kadokawa}"
 OUTPUT_DIR="${OUTPUT_DIR:-outputs/train/smolvla_so101_digits}"
 JOB_NAME="${JOB_NAME:-smolvla_so101_digits}"
 DEVICE="${DEVICE:-cuda}"
@@ -25,6 +25,8 @@ NUM_WORKERS="${NUM_WORKERS:-4}"
 MNIST_EXAMPLES_PER_DIGIT="${MNIST_EXAMPLES_PER_DIGIT:-64}"
 MNIST_CACHE_DIR="${MNIST_CACHE_DIR:-}"
 USE_MNIST="${USE_MNIST:-false}"
+USE_TARGET_DRAWING="${USE_TARGET_DRAWING:-true}"
+BLUE_WORLD_FILTER="${BLUE_WORLD_FILTER:-false}"
 DIGIT_MAP="${DIGIT_MAP:-}"
 POLICY_REPO_ID="${POLICY_REPO_ID:-}"
 PUSH_TO_HUB="${PUSH_TO_HUB:-true}"
@@ -34,6 +36,10 @@ GRADIENT_CHECKPOINTING="${GRADIENT_CHECKPOINTING:-true}"
 GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
 HEARTBEAT_TIMEOUT="${HEARTBEAT_TIMEOUT:-300}"
 DIAGNOSTIC_DUMP_INTERVAL="${DIAGNOSTIC_DUMP_INTERVAL:-0}"
+HUB_ONLY="${HUB_ONLY:-true}"
+RESUME="${RESUME:-false}"
+HUB_ONLY="true"
+PUSH_TO_HUB="true"
 
 ARGS=(
   --dataset.repo_id "${DATASET_REPO_ID}"
@@ -48,6 +54,12 @@ ARGS=(
   --heartbeat_timeout "${HEARTBEAT_TIMEOUT}"
   --diagnostic_dump_interval "${DIAGNOSTIC_DUMP_INTERVAL}"
 )
+
+if [[ "${HUB_ONLY}" == "true" ]]; then
+  ARGS+=(--hub_only)
+elif [[ "${RESUME}" == "true" ]]; then
+  ARGS+=(--resume)
+fi
 
 if [[ "${FREEZE_VISION_ENCODER}" == "true" ]]; then
   ARGS+=(--policy.freeze_vision_encoder)
@@ -71,6 +83,18 @@ if [[ "${USE_MNIST}" == "true" ]]; then
   ARGS+=(--use-mnist)
 else
   ARGS+=(--no-use-mnist)
+fi
+
+if [[ "${USE_TARGET_DRAWING}" == "true" ]]; then
+  ARGS+=(--use-target-drawing)
+else
+  ARGS+=(--no-use-target-drawing)
+fi
+
+if [[ "${BLUE_WORLD_FILTER}" == "true" ]]; then
+  ARGS+=(--policy.blue_world_filter)
+else
+  ARGS+=(--no-policy.blue_world_filter)
 fi
 
 if [[ -n "${MNIST_CACHE_DIR}" ]]; then

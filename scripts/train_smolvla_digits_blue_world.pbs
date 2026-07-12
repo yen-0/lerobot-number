@@ -1,0 +1,23 @@
+#!/bin/bash
+#PBS -N smolvla_digits_blue_world
+#PBS -q regular-g
+#PBS -W group_list=gw13
+#PBS -l select=1:ncpus=16:mem=60gb
+#PBS -l walltime=48:00:00
+#PBS -j oe
+
+set -euo pipefail
+
+# First export the blue-world dataset, then train on it in the same PBS job so
+# training cannot start before the filtered dataset exists.
+bash "$(dirname "$0")/filter_blue_world.pbs"
+
+export DATASET_REPO_ID="${DATASET_REPO_ID:-${FILTERED_DATASET_REPO_ID:-yen-0/so101-write-5-kadokawa-blue-world}}"
+export BLUE_WORLD_FILTER="${BLUE_WORLD_FILTER:-true}"
+export POLICY_REPO_ID="${POLICY_REPO_ID:-${BLUE_POLICY_REPO_ID:-yen-0/smolvla-so101-digits-0707-blue-world}}"
+export JOB_NAME="${JOB_NAME:-smolvla_digits_blue_world}"
+export OUTPUT_DIR="${OUTPUT_DIR:-./outputs/smolvla_digits_blue_world}"
+export HUB_ONLY="true"
+export PUSH_TO_HUB="true"
+
+exec bash "$(dirname "$0")/train_smolvla_digits.pbs"

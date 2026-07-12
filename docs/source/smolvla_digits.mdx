@@ -10,7 +10,7 @@ The MNIST image is training-only. It is used to shape the shared latent space, n
 
 ## What to prepare
 
-- An SO-101 LeRobot dataset with drawing demonstrations, such as `k1000dai/so101-write` or `k1000dai/so101-writei`
+- An SO-101 LeRobot dataset with drawing demonstrations, such as `yen-0/so101-write-5-kadokawa`
 - A task string stored in the dataset metadata that identifies the target digit per episode
 - Hugging Face access to download MNIST and the dataset
 
@@ -40,7 +40,7 @@ Or call the Python entrypoint directly:
 
 ```bash
 uv run python examples/training/train_smolvla_digits.py \
-  --dataset.repo_id=k1000dai/so101-writei \
+  --dataset.repo_id=yen-0/so101-write-5-kadokawa \
   --output_dir=outputs/train/smolvla_so101_digits \
   --steps=30000 \
   --batch_size=8 \
