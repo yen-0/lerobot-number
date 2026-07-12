@@ -2032,6 +2032,7 @@ def filter_blue_world_dataset(
 
     current_episode = None
     processed_frames = 0
+    frame_keys_to_skip = {"index", "episode_index", "frame_index", "timestamp", "task_index"}
     try:
         for idx in tqdm(range(len(dataset)), desc="Filtering dataset frames"):
             item = dataset[idx]
@@ -2047,6 +2048,8 @@ def filter_blue_world_dataset(
 
             frame = {"task": item["task"]}
             for key in dataset.meta.features:
+                if key in frame_keys_to_skip:
+                    continue
                 value = item[key]
                 if key in camera_keys:
                     frame[key] = blue_mask_image(
