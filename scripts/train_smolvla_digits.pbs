@@ -106,6 +106,14 @@ ARGS=(
   --heartbeat_timeout="${HEARTBEAT_TIMEOUT:-300}"
   --diagnostic_dump_interval="${DIAGNOSTIC_DUMP_INTERVAL:-300}"
   --gradient_accumulation_steps="${GRADIENT_ACCUMULATION_STEPS:-1}"
+  --target_drawings_dir="${TARGET_DRAWINGS_DIR:-target_drawings}"
+  --policy.blue_world_hue_min="${BLUE_WORLD_HUE_MIN:-0.55}"
+  --policy.blue_world_hue_max="${BLUE_WORLD_HUE_MAX:-0.75}"
+  --policy.blue_world_saturation_min="${BLUE_WORLD_SATURATION_MIN:-0.2}"
+  --policy.blue_world_value_min="${BLUE_WORLD_VALUE_MIN:-0.05}"
+  --policy.blue_world_cleanup_passes="${BLUE_WORLD_CLEANUP_PASSES:-1}"
+  --policy.blue_world_min_blue_neighbors="${BLUE_WORLD_MIN_BLUE_NEIGHBORS:-1}"
+  --policy.blue_world_fill_hole_neighbors="${BLUE_WORLD_FILL_HOLE_NEIGHBORS:-6}"
 )
 
 if [[ "${HUB_ONLY:-true}" == "true" ]]; then

@@ -61,6 +61,9 @@ HUE_MIN="${HUE_MIN:-0.55}"
 HUE_MAX="${HUE_MAX:-0.75}"
 SATURATION_MIN="${SATURATION_MIN:-0.2}"
 VALUE_MIN="${VALUE_MIN:-0.05}"
+CLEANUP_PASSES="${CLEANUP_PASSES:-1}"
+MIN_BLUE_NEIGHBORS="${MIN_BLUE_NEIGHBORS:-1}"
+FILL_HOLE_NEIGHBORS="${FILL_HOLE_NEIGHBORS:-6}"
 EPISODE_INDICES="${EPISODE_INDICES:-}"
 
 ARGS=(
@@ -71,6 +74,9 @@ ARGS=(
   --operation.hue_max "${HUE_MAX}"
   --operation.saturation_min "${SATURATION_MIN}"
   --operation.value_min "${VALUE_MIN}"
+  --operation.cleanup_passes "${CLEANUP_PASSES}"
+  --operation.min_blue_neighbors "${MIN_BLUE_NEIGHBORS}"
+  --operation.fill_hole_neighbors "${FILL_HOLE_NEIGHBORS}"
 )
 
 if [[ -n "${FILTERED_DATASET_ROOT}" ]]; then

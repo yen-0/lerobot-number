@@ -85,7 +85,33 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Whether to filter live camera observations to blue pixels on a white background",
     )
+    parser.add_argument("--policy.blue_world_hue_min", dest="blue_world_hue_min", type=float, default=0.55)
+    parser.add_argument("--policy.blue_world_hue_max", dest="blue_world_hue_max", type=float, default=0.75)
+    parser.add_argument(
+        "--policy.blue_world_saturation_min", dest="blue_world_saturation_min", type=float, default=0.2
+    )
+    parser.add_argument("--policy.blue_world_value_min", dest="blue_world_value_min", type=float, default=0.05)
+    parser.add_argument(
+        "--policy.blue_world_cleanup_passes", dest="blue_world_cleanup_passes", type=int, default=1
+    )
+    parser.add_argument(
+        "--policy.blue_world_min_blue_neighbors",
+        dest="blue_world_min_blue_neighbors",
+        type=int,
+        default=1,
+    )
+    parser.add_argument(
+        "--policy.blue_world_fill_hole_neighbors",
+        dest="blue_world_fill_hole_neighbors",
+        type=int,
+        default=6,
+    )
     parser.add_argument("--digit_map", default=None)
+    parser.add_argument(
+        "--target_drawings_dir",
+        default=os.environ.get("TARGET_DRAWINGS_DIR", "target_drawings"),
+        help="Directory containing episode_<n>.png goal images. Defaults to TARGET_DRAWINGS_DIR or target_drawings.",
+    )
     parser.add_argument("--policy.repo_id", dest="policy_repo_id", default=None)
     parser.add_argument("--push_to_hub", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
@@ -488,6 +514,13 @@ def main() -> None:
         digit_alignment_loss_weight=0.25,
         digit_classification_loss_weight=1.0,
         blue_world_filter=args.blue_world_filter,
+        blue_world_hue_min=args.blue_world_hue_min,
+        blue_world_hue_max=args.blue_world_hue_max,
+        blue_world_saturation_min=args.blue_world_saturation_min,
+        blue_world_value_min=args.blue_world_value_min,
+        blue_world_cleanup_passes=args.blue_world_cleanup_passes,
+        blue_world_min_blue_neighbors=args.blue_world_min_blue_neighbors,
+        blue_world_fill_hole_neighbors=args.blue_world_fill_hole_neighbors,
         gradient_checkpointing=args.gradient_checkpointing,
     )
     export_config = _build_export_config(config)
@@ -632,7 +665,7 @@ def main() -> None:
     if args.use_target_drawing:
         # Load target drawings for all episodes into RAM (Approach B)
         logging.info("Loading target drawings for all episodes into RAM...")
-        target_drawings_dir = Path("target_drawings")
+        target_drawings_dir = Path(args.target_drawings_dir)
         from PIL import Image
         import numpy as np
 

@@ -1,0 +1,159 @@
+#!/bin/bash
+#PBS -N smolvla_digits_combined_blue_world
+#PBS -q regular-g
+#PBS -W group_list=gw13
+#PBS -l select=1:ncpus=16:mem=60gb
+#PBS -l walltime=48:00:00
+#PBS -j oe
+
+set -euo pipefail
+
+PBS_O_WORKDIR="${PBS_O_WORKDIR:-$(pwd)}"
+cd "${PBS_O_WORKDIR}"
+
+if [[ -f config.env ]]; then
+  source config.env
+fi
+if [[ -f config.shared.env ]]; then
+  source config.shared.env
+fi
+
+if [[ -z "${HF_TOKEN:-}" || "${HF_TOKEN}" == "hf_YOUR_TOKEN_HERE" ]]; then
+  echo "[WARNING] HF_TOKEN is not set. Put it in ignored config.env if this job needs private Hub access." >&2
+else
+  echo "[INFO] HF_TOKEN loaded successfully (starts with: ${HF_TOKEN:0:8}...)"
+fi
+
+if [[ -d "/work/gw13/w13009" ]]; then
+  CACHE_BASE="/work/gw13/w13009/.cache"
+else
+  CACHE_BASE="$HOME/.cache"
+fi
+
+mkdir -p "$CACHE_BASE/huggingface"
+mkdir -p "$CACHE_BASE/huggingface/datasets"
+mkdir -p "$CACHE_BASE/lerobot"
+
+export HF_HOME=$CACHE_BASE/huggingface
+export HF_LEROBOT_HOME=$CACHE_BASE/lerobot
+export HF_DATASETS_CACHE=$CACHE_BASE/huggingface/datasets
+export PYTHONPATH=${PYTHONPATH:-}:$(pwd)/src
+export PYTHONUNBUFFERED=1
+
+export APPTAINERENV_HF_HOME=$HF_HOME
+export APPTAINERENV_HF_LEROBOT_HOME=$HF_LEROBOT_HOME
+export APPTAINERENV_HF_DATASETS_CACHE=$HF_DATASETS_CACHE
+export APPTAINERENV_PYTHONPATH=$PYTHONPATH
+export APPTAINERENV_PYTHONUNBUFFERED=1
+export APPTAINERENV_PBS_O_WORKDIR="$PBS_O_WORKDIR"
+
+if [[ -n "${HF_TOKEN:-}" ]]; then
+  export APPTAINERENV_HF_TOKEN="$HF_TOKEN"
+fi
+
+module load "${APPTAINER_MODULE}"
+
+FULL_DIGITS_DATASET_REPO_ID="${FULL_DIGITS_DATASET_REPO_ID:-k1000dai/so101-write}"
+FOCUSED_DIGITS_DATASET_REPO_ID="${FOCUSED_DIGITS_DATASET_REPO_ID:-yen-0/so101-write-5-kadokawa}"
+FULL_DIGITS_FILTERED_DATASET_REPO_ID="${FULL_DIGITS_FILTERED_DATASET_REPO_ID:-yen-0/so101-write-blue-world}"
+FOCUSED_DIGITS_FILTERED_DATASET_REPO_ID="${FOCUSED_DIGITS_FILTERED_DATASET_REPO_ID:-yen-0/so101-write-5-kadokawa-blue-world}"
+COMBINED_BLUE_WORLD_DATASET_REPO_ID="${COMBINED_BLUE_WORLD_DATASET_REPO_ID:-yen-0/so101-write-combined-blue-world}"
+COMBINED_TARGET_DRAWINGS_DIR="${COMBINED_TARGET_DRAWINGS_DIR:-./target_drawings_combined_blue_world}"
+COMBINED_BLUE_POLICY_REPO_ID="${COMBINED_BLUE_POLICY_REPO_ID:-yen-0/smolvla-so101-digits-combined-blue-world}"
+COMBINED_BLUE_JOB_NAME="${COMBINED_BLUE_JOB_NAME:-smolvla_digits_combined_blue_world}"
+COMBINED_BLUE_OUTPUT_DIR="${COMBINED_BLUE_OUTPUT_DIR:-./outputs/smolvla_digits_combined_blue_world}"
+
+export PUSH_TO_HUB="${PUSH_TO_HUB:-true}"
+export HUE_MIN="${BLUE_WORLD_HUE_MIN:-0.55}"
+export HUE_MAX="${BLUE_WORLD_HUE_MAX:-0.75}"
+export SATURATION_MIN="${BLUE_WORLD_SATURATION_MIN:-0.2}"
+export VALUE_MIN="${BLUE_WORLD_VALUE_MIN:-0.05}"
+export CLEANUP_PASSES="${BLUE_WORLD_CLEANUP_PASSES:-1}"
+export MIN_BLUE_NEIGHBORS="${BLUE_WORLD_MIN_BLUE_NEIGHBORS:-1}"
+export FILL_HOLE_NEIGHBORS="${BLUE_WORLD_FILL_HOLE_NEIGHBORS:-6}"
+
+LOG_DIR="${PBS_O_WORKDIR}/logs"
+mkdir -p "${LOG_DIR}"
+LOG_FILE="${LOG_DIR}/smolvla_digits_combined_blue_world_${PBS_JOBID:-manual}_$(date +%Y%m%d_%H%M%S).log"
+
+echo "[$(date -Is)] starting combined blue-world + goal-image job" | tee -a "${LOG_FILE}"
+echo "[$(date -Is)] full dataset: ${FULL_DIGITS_DATASET_REPO_ID}" | tee -a "${LOG_FILE}"
+echo "[$(date -Is)] focused dataset: ${FOCUSED_DIGITS_DATASET_REPO_ID}" | tee -a "${LOG_FILE}"
+echo "[$(date -Is)] merged dataset: ${COMBINED_BLUE_WORLD_DATASET_REPO_ID}" | tee -a "${LOG_FILE}"
+echo "[$(date -Is)] target drawings dir: ${COMBINED_TARGET_DRAWINGS_DIR}" | tee -a "${LOG_FILE}"
+
+run_blue_filter() {
+  local source_repo_id="$1"
+  local filtered_repo_id="$2"
+  echo "[$(date -Is)] filtering ${source_repo_id} -> ${filtered_repo_id}" | tee -a "${LOG_FILE}"
+  SOURCE_DATASET_REPO_ID="${source_repo_id}" \
+  FILTERED_DATASET_REPO_ID="${filtered_repo_id}" \
+  bash "${PBS_O_WORKDIR}/scripts/filter_blue_world.pbs" 2>&1 | tee -a "${LOG_FILE}"
+}
+
+run_blue_filter "${FULL_DIGITS_DATASET_REPO_ID}" "${FULL_DIGITS_FILTERED_DATASET_REPO_ID}"
+run_blue_filter "${FOCUSED_DIGITS_DATASET_REPO_ID}" "${FOCUSED_DIGITS_FILTERED_DATASET_REPO_ID}"
+
+BINDS=(
+  --bind "${PBS_O_WORKDIR}:${PBS_O_WORKDIR}:rw"
+  --bind "$HOME:$HOME:rw"
+)
+
+if [[ -d "/work/gw13" ]]; then
+  BINDS+=(--bind "/work/gw13:/work/gw13:rw")
+fi
+
+if [[ "${CACHE_BASE}" != "$HOME/.cache" ]]; then
+  BINDS+=(--bind "${CACHE_BASE}:${CACHE_BASE}:rw")
+fi
+
+MERGE_ARGS=(
+  --new_repo_id "${COMBINED_BLUE_WORLD_DATASET_REPO_ID}"
+  --operation.type merge
+  --operation.repo_ids "['${FULL_DIGITS_FILTERED_DATASET_REPO_ID}', '${FOCUSED_DIGITS_FILTERED_DATASET_REPO_ID}']"
+)
+
+if [[ "${PUSH_TO_HUB}" == "true" ]]; then
+  MERGE_ARGS+=(--push_to_hub true)
+else
+  MERGE_ARGS+=(--push_to_hub false)
+fi
+
+echo "[$(date -Is)] merging filtered datasets into ${COMBINED_BLUE_WORLD_DATASET_REPO_ID}" | tee -a "${LOG_FILE}"
+apptainer exec \
+  "${BINDS[@]}" \
+  --writable-tmpfs \
+  --pwd "${PBS_O_WORKDIR}" \
+  "${APPTAINER_IMAGE}" \
+  python -u src/lerobot/scripts/lerobot_edit_dataset.py "${MERGE_ARGS[@]}" 2>&1 | tee -a "${LOG_FILE}"
+
+EXTRACT_ARGS=(
+  --repo-id "${COMBINED_BLUE_WORLD_DATASET_REPO_ID}"
+  --output-dir "${COMBINED_TARGET_DRAWINGS_DIR}"
+  --crop "${EXTRACT_CROP:-350 65 606 243}"
+)
+
+if [[ -n "${EXTRACT_CAMERA_KEY:-}" ]]; then
+  EXTRACT_ARGS+=(--camera-key "${EXTRACT_CAMERA_KEY}")
+fi
+
+echo "[$(date -Is)] extracting merged target drawings to ${COMBINED_TARGET_DRAWINGS_DIR}" | tee -a "${LOG_FILE}"
+apptainer exec \
+  "${BINDS[@]}" \
+  --writable-tmpfs \
+  --pwd "${PBS_O_WORKDIR}" \
+  "${APPTAINER_IMAGE}" \
+  python -u src/lerobot/scripts/lerobot_extract_patterns.py "${EXTRACT_ARGS[@]}" 2>&1 | tee -a "${LOG_FILE}"
+
+export DATASET_REPO_ID="${COMBINED_BLUE_WORLD_DATASET_REPO_ID}"
+export BLUE_WORLD_FILTER="true"
+export USE_TARGET_DRAWING="true"
+export TARGET_DRAWINGS_DIR="${COMBINED_TARGET_DRAWINGS_DIR}"
+export POLICY_REPO_ID="${COMBINED_BLUE_POLICY_REPO_ID}"
+export JOB_NAME="${COMBINED_BLUE_JOB_NAME}"
+export OUTPUT_DIR="${COMBINED_BLUE_OUTPUT_DIR}"
+export HUB_ONLY="${HUB_ONLY:-true}"
+export PUSH_TO_HUB="${PUSH_TO_HUB:-true}"
+
+echo "[$(date -Is)] launching training on ${DATASET_REPO_ID}" | tee -a "${LOG_FILE}"
+exec bash "${PBS_O_WORKDIR}/scripts/train_smolvla_digits.pbs"

@@ -134,6 +134,9 @@ def blue_mask_image(
     hue_max: float = 0.75,
     saturation_min: float = 0.2,
     value_min: float = 0.05,
+    cleanup_passes: int = 0,
+    min_blue_neighbors: int = 0,
+    fill_hole_neighbors: int = 0,
 ) -> np.ndarray:
     """Keep only blue pixels and replace everything else with white."""
     image_hwc = _ensure_hwc_uint8_image(image)
@@ -148,9 +151,46 @@ def blue_mask_image(
         hue_mask = (hue >= hue_min) | (hue <= hue_max)
 
     blue_mask = hue_mask & (saturation >= saturation_min) & (value >= value_min)
+    if cleanup_passes > 0 and (min_blue_neighbors > 0 or fill_hole_neighbors > 0):
+        blue_mask = _cleanup_binary_mask(
+            blue_mask,
+            cleanup_passes=cleanup_passes,
+            min_blue_neighbors=min_blue_neighbors,
+            fill_hole_neighbors=fill_hole_neighbors,
+        )
     filtered = np.full_like(image_hwc, 255, dtype=np.uint8)
     filtered[blue_mask] = image_hwc[blue_mask]
     return filtered
+
+
+def _count_mask_neighbors(mask: np.ndarray) -> np.ndarray:
+    """Count 8-connected neighbors for each pixel in a boolean mask."""
+    padded = np.pad(mask.astype(np.uint8), 1, mode="constant", constant_values=0)
+    neighbor_count = np.zeros(mask.shape, dtype=np.uint8)
+    for y_offset in range(3):
+        for x_offset in range(3):
+            if y_offset == 1 and x_offset == 1:
+                continue
+            neighbor_count += padded[y_offset : y_offset + mask.shape[0], x_offset : x_offset + mask.shape[1]]
+    return neighbor_count
+
+
+def _cleanup_binary_mask(
+    mask: np.ndarray,
+    *,
+    cleanup_passes: int,
+    min_blue_neighbors: int,
+    fill_hole_neighbors: int,
+) -> np.ndarray:
+    """Remove isolated speckles and fill tiny gaps in a binary mask."""
+    cleaned = mask.astype(bool, copy=True)
+    for _ in range(cleanup_passes):
+        neighbor_count = _count_mask_neighbors(cleaned)
+        if min_blue_neighbors > 0:
+            cleaned &= neighbor_count >= min_blue_neighbors
+        if fill_hole_neighbors > 0:
+            cleaned |= (~cleaned) & (neighbor_count >= fill_hole_neighbors)
+    return cleaned
 
 
 def _load_episode_with_stats(src_dataset: LeRobotDataset, episode_idx: int) -> dict:
@@ -1987,6 +2027,9 @@ def filter_blue_world_dataset(
     hue_max: float = 0.75,
     saturation_min: float = 0.2,
     value_min: float = 0.05,
+    cleanup_passes: int = 0,
+    min_blue_neighbors: int = 0,
+    fill_hole_neighbors: int = 0,
 ) -> LeRobotDataset:
     """Export a dataset where only blue pixels remain and the rest become white."""
     if repo_id is None:
@@ -2008,12 +2051,15 @@ def filter_blue_world_dataset(
         raise ValueError(f"No camera keys found in dataset {dataset.repo_id}")
 
     logging.info(
-        "Filtering dataset %s into blue-only world (hue_min=%.3f, hue_max=%.3f, saturation_min=%.3f, value_min=%.3f)",
+        "Filtering dataset %s into blue-only world (hue_min=%.3f, hue_max=%.3f, saturation_min=%.3f, value_min=%.3f, cleanup_passes=%d, min_blue_neighbors=%d, fill_hole_neighbors=%d)",
         dataset.repo_id,
         hue_min,
         hue_max,
         saturation_min,
         value_min,
+        cleanup_passes,
+        min_blue_neighbors,
+        fill_hole_neighbors,
     )
 
     if output_dir.exists():
@@ -2062,6 +2108,9 @@ def filter_blue_world_dataset(
                         hue_max=hue_max,
                         saturation_min=saturation_min,
                         value_min=value_min,
+                        cleanup_passes=cleanup_passes,
+                        min_blue_neighbors=min_blue_neighbors,
+                        fill_hole_neighbors=fill_hole_neighbors,
                     )
                 else:
                     frame[key] = value

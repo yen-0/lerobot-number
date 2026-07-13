@@ -24,6 +24,7 @@ import numpy as np
 from PIL import Image
 import torch
 
+from lerobot.datasets.dataset_tools import blue_mask_image
 from lerobot.processor import (
     AddBatchDimensionProcessorStep,
     ComplementaryDataProcessorStep,
@@ -139,85 +140,6 @@ class SmolVLAGoalImageProcessorStep(ObservationProcessorStep):
         return features
 
 
-def _ensure_hwc_uint8_image(image: torch.Tensor | np.ndarray) -> np.ndarray:
-    if isinstance(image, torch.Tensor):
-        array = image.detach().cpu().numpy()
-    else:
-        array = np.asarray(image)
-
-    if array.ndim != 3:
-        raise ValueError(f"Expected image with 3 dimensions, got shape {array.shape}")
-
-    if array.shape[0] in {1, 3} and array.shape[-1] not in {1, 3}:
-        array = np.moveaxis(array, 0, -1)
-
-    if array.shape[-1] != 3:
-        raise ValueError(f"Expected RGB image with 3 channels, got shape {array.shape}")
-
-    if np.issubdtype(array.dtype, np.floating):
-        if array.max() <= 1.0:
-            array = array * 255.0
-        array = np.clip(array, 0.0, 255.0).astype(np.uint8)
-    else:
-        array = np.clip(array, 0, 255).astype(np.uint8)
-
-    return array
-
-
-def _rgb_to_hsv(image: np.ndarray) -> np.ndarray:
-    rgb = image.astype(np.float32) / 255.0
-    r = rgb[..., 0]
-    g = rgb[..., 1]
-    b = rgb[..., 2]
-
-    maxc = np.max(rgb, axis=-1)
-    minc = np.min(rgb, axis=-1)
-    delta = maxc - minc
-
-    hue = np.zeros_like(maxc)
-    saturation = np.zeros_like(maxc)
-    value = maxc
-
-    nonzero = delta > 0
-    saturation[maxc > 0] = delta[maxc > 0] / maxc[maxc > 0]
-
-    r_mask = nonzero & (maxc == r)
-    g_mask = nonzero & (maxc == g)
-    b_mask = nonzero & (maxc == b)
-
-    hue[r_mask] = np.mod((g[r_mask] - b[r_mask]) / delta[r_mask], 6.0)
-    hue[g_mask] = ((b[g_mask] - r[g_mask]) / delta[g_mask]) + 2.0
-    hue[b_mask] = ((r[b_mask] - g[b_mask]) / delta[b_mask]) + 4.0
-    hue = (hue / 6.0) % 1.0
-
-    return np.stack((hue, saturation, value), axis=-1)
-
-
-def _blue_mask_image(
-    image: torch.Tensor | np.ndarray,
-    *,
-    hue_min: float,
-    hue_max: float,
-    saturation_min: float,
-    value_min: float,
-) -> np.ndarray:
-    image_hwc = _ensure_hwc_uint8_image(image)
-    hsv = _rgb_to_hsv(image_hwc)
-    hue = hsv[..., 0]
-    saturation = hsv[..., 1]
-    value = hsv[..., 2]
-
-    if hue_min <= hue_max:
-        hue_mask = (hue >= hue_min) & (hue <= hue_max)
-    else:
-        hue_mask = (hue >= hue_min) | (hue <= hue_max)
-
-    blue_mask = hue_mask & (saturation >= saturation_min) & (value >= value_min)
-    filtered = np.full_like(image_hwc, 255, dtype=np.uint8)
-    filtered[blue_mask] = image_hwc[blue_mask]
-    return filtered
-
-
 @dataclass
 @ProcessorStepRegistry.register(name="smolvla_blue_world_filter_processor")
 class SmolVLABlueWorldProcessorStep(ObservationProcessorStep):
@@ -227,16 +149,22 @@ class SmolVLABlueWorldProcessorStep(ObservationProcessorStep):
     hue_max: float = 0.75
     saturation_min: float = 0.2
     value_min: float = 0.05
+    cleanup_passes: int = 1
+    min_blue_neighbors: int = 1
+    fill_hole_neighbors: int = 6
     target_image_key: str = "observation.target_drawing"
     image_keys: list[str] | None = None
 
     def _filter_single_image(self, image: torch.Tensor | np.ndarray) -> torch.Tensor:
-        filtered = _blue_mask_image(
+        filtered = blue_mask_image(
             image,
             hue_min=self.hue_min,
             hue_max=self.hue_max,
             saturation_min=self.saturation_min,
             value_min=self.value_min,
+            cleanup_passes=self.cleanup_passes,
+            min_blue_neighbors=self.min_blue_neighbors,
+            fill_hole_neighbors=self.fill_hole_neighbors,
         )
         return torch.from_numpy(filtered.astype(np.float32) / 255.0).permute(2, 0, 1).contiguous()
 
@@ -279,6 +207,9 @@ class SmolVLABlueWorldProcessorStep(ObservationProcessorStep):
             "hue_max": self.hue_max,
             "saturation_min": self.saturation_min,
             "value_min": self.value_min,
+            "cleanup_passes": self.cleanup_passes,
+            "min_blue_neighbors": self.min_blue_neighbors,
+            "fill_hole_neighbors": self.fill_hole_neighbors,
             "target_image_key": self.target_image_key,
             "image_keys": self.image_keys,
         }
@@ -334,6 +265,9 @@ def make_smolvla_pre_post_processors(
                 hue_max=config.blue_world_hue_max,
                 saturation_min=config.blue_world_saturation_min,
                 value_min=config.blue_world_value_min,
+                cleanup_passes=config.blue_world_cleanup_passes,
+                min_blue_neighbors=config.blue_world_min_blue_neighbors,
+                fill_hole_neighbors=config.blue_world_fill_hole_neighbors,
                 image_keys=image_keys,
             )
         )

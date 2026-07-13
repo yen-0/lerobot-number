@@ -315,6 +315,9 @@ class FilterBlueWorldConfig(OperationConfig):
     hue_max: float = 0.75
     saturation_min: float = 0.2
     value_min: float = 0.05
+    cleanup_passes: int = 1
+    min_blue_neighbors: int = 1
+    fill_hole_neighbors: int = 6
 
 
 @OperationConfig.register_subclass("reencode_videos")
@@ -722,6 +725,9 @@ def handle_filter_blue_world(cfg: EditDatasetConfig) -> None:
         hue_max=cfg.operation.hue_max,
         saturation_min=cfg.operation.saturation_min,
         value_min=cfg.operation.value_min,
+        cleanup_passes=cfg.operation.cleanup_passes,
+        min_blue_neighbors=cfg.operation.min_blue_neighbors,
+        fill_hole_neighbors=cfg.operation.fill_hole_neighbors,
     )
 
     logging.info(f"Blue-world dataset saved to {output_root}")

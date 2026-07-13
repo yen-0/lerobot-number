@@ -85,6 +85,9 @@ class SmolVLAConfig(PreTrainedConfig):
     blue_world_hue_max: float = 0.75
     blue_world_saturation_min: float = 0.2
     blue_world_value_min: float = 0.05
+    blue_world_cleanup_passes: int = 1
+    blue_world_min_blue_neighbors: int = 1
+    blue_world_fill_hole_neighbors: int = 6
 
     # Training presets
     optimizer_lr: float = 1e-4
