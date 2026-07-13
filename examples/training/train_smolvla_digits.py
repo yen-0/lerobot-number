@@ -632,7 +632,7 @@ def main() -> None:
     if args.use_target_drawing:
         # Load target drawings for all episodes into RAM (Approach B)
         logging.info("Loading target drawings for all episodes into RAM...")
-        target_drawings_dir = Path("outputs/target_drawings")
+        target_drawings_dir = Path("target_drawings")
         from PIL import Image
         import numpy as np
 

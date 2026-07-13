@@ -16,8 +16,11 @@
 
 """Extract target drawing patterns (last frames) from each episode and save them locally."""
 
+import argparse
 import logging
+import os
 from pathlib import Path
+
 import numpy as np
 from PIL import Image
 
@@ -25,31 +28,82 @@ from lerobot.datasets import LeRobotDataset
 from lerobot.utils.utils import init_logging
 
 
-def main():
-    init_logging(console_level="INFO", file_level="DEBUG")
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
-    # Hardcoded parameters
-    src_repo_id = "yen-0/so101-write-5-kadokawa"
-    crop_coords = [386, 60, 642, 238] # x_min y_min x_max y_max
 
-    # Load source dataset
-    logging.info(f"Loading source dataset: {src_repo_id}...")
-    src_dataset = LeRobotDataset(src_repo_id)
-    logging.info(f"Source dataset loaded. Total episodes: {src_dataset.num_episodes}")
+def parse_crop(value: str) -> tuple[int, int, int, int]:
+    parts = value.replace(",", " ").split()
+    if len(parts) != 4:
+        raise ValueError(f"Expected 4 crop coordinates, got: {value!r}")
+    return tuple(int(part) for part in parts)
 
-    # Determine camera key (non-wrist camera)
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--repo-id",
+        default=os.environ.get("EXTRACT_SOURCE_REPO_ID") or os.environ.get("DATASET_REPO_ID"),
+        help="Dataset repo id to read episodes from. Defaults to EXTRACT_SOURCE_REPO_ID, then DATASET_REPO_ID.",
+    )
+    parser.add_argument(
+        "--crop",
+        default=os.environ.get("EXTRACT_CROP", "350 65 606 243"),
+        help="Crop box as 'x_min y_min x_max y_max'. Defaults to EXTRACT_CROP or '350 65 606 243'.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=os.environ.get("EXTRACT_OUTPUT_DIR", str(REPO_ROOT / "target_drawings")),
+        help="Directory to write episode PNGs to. Defaults to repo-root target_drawings.",
+    )
+    parser.add_argument(
+        "--camera-key",
+        default=os.environ.get("EXTRACT_CAMERA_KEY"),
+        help="Optional camera key override. Defaults to the first non-wrist camera in the dataset.",
+    )
+    return parser
+
+
+def resolve_camera_key(src_dataset: LeRobotDataset, requested_camera_key: str | None) -> str:
     camera_keys = src_dataset.meta.camera_keys
-    non_wrist_keys = [k for k in camera_keys if "wrist" not in k]
+    if requested_camera_key:
+        if requested_camera_key not in camera_keys:
+            raise ValueError(
+                f"Requested camera key {requested_camera_key!r} not found. Available camera keys: {camera_keys}"
+            )
+        return requested_camera_key
+
+    non_wrist_keys = [key for key in camera_keys if "wrist" not in key]
     if not non_wrist_keys:
         raise ValueError(f"No non-wrist camera found in {camera_keys}. All cameras: {camera_keys}")
-    camera_key = non_wrist_keys[0]
-    logging.info(f"Using camera key for pattern extraction: {camera_key}")
+    return non_wrist_keys[0]
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if not args.repo_id:
+        raise ValueError(
+            "No dataset repo id provided. Pass --repo-id or set EXTRACT_SOURCE_REPO_ID / DATASET_REPO_ID."
+        )
+
+    init_logging(console_level="INFO", file_level="DEBUG")
+
+    crop_coords = parse_crop(args.crop)
+    out_dir = Path(args.output_dir).expanduser().resolve()
+
+    logging.info("Repository root: %s", REPO_ROOT)
+    logging.info("Loading source dataset: %s", args.repo_id)
+    src_dataset = LeRobotDataset(args.repo_id)
+    logging.info("Source dataset loaded. Total episodes: %s", src_dataset.num_episodes)
+
+    camera_key = resolve_camera_key(src_dataset, args.camera_key)
+    logging.info("Using camera key for pattern extraction: %s", camera_key)
 
     x_min, y_min, x_max, y_max = crop_coords
-    out_dir = Path("outputs/target_drawings")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    logging.info(f"Extracting target drawings to: {out_dir}")
+    logging.info("Extracting target drawings to: %s", out_dir)
     for ep_idx in range(src_dataset.num_episodes):
         to_idx = src_dataset.meta.episodes["dataset_to_index"][ep_idx]
         last_frame_idx = to_idx - 1
@@ -62,11 +116,11 @@ def main():
             last_img_np = (last_img_np * 255.0).clip(0, 255).astype(np.uint8)
         last_img_pil = Image.fromarray(last_img_np)
         cropped_pil = last_img_pil.crop((x_min, y_min, x_max, y_max))
-        
+
         out_path = out_dir / f"episode_{ep_idx}.png"
         cropped_pil.save(out_path)
         if (ep_idx + 1) % 10 == 0 or ep_idx == 0:
-            logging.info(f"Saved episode {ep_idx + 1}/{src_dataset.num_episodes} target drawing to {out_path}")
+            logging.info("Saved episode %s/%s target drawing to %s", ep_idx + 1, src_dataset.num_episodes, out_path)
 
     logging.info("Target drawings extraction completed successfully!")
 
