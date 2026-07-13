@@ -193,6 +193,40 @@ def test_smolvla_blue_world_processor_filters_camera_observation():
     assert torch.equal(processed["observation.target_drawing"], torch.ones(2, 3, 2, 2))
 
 
+def test_smolvla_blue_world_processor_filters_time_stacked_camera_observation():
+    step = SmolVLABlueWorldProcessorStep(image_keys=["observation.images.front"])
+    observation = {
+        "observation.images.front": torch.tensor(
+            [
+                [
+                    [
+                        [[0.0, 0.0], [1.0, 1.0]],
+                        [[0.0, 1.0], [0.0, 1.0]],
+                        [[1.0, 0.0], [0.0, 1.0]],
+                    ]
+                ]
+            ],
+            dtype=torch.float32,
+        )
+    }
+
+    processed = step.observation(observation)
+    filtered = processed["observation.images.front"]
+
+    assert filtered.shape == (1, 1, 3, 2, 2)
+    assert torch.allclose(filtered[0, 0, :, 0, 0], torch.tensor([0.0, 0.0, 1.0]))
+    assert torch.allclose(filtered[0, 0, :, 0, 1], torch.tensor([1.0, 1.0, 1.0]))
+
+
+def test_smolvla_blue_world_processor_skips_non_image_shapes():
+    step = SmolVLABlueWorldProcessorStep(image_keys=["observation.images.front"])
+    non_image = torch.zeros(4, 1)
+
+    processed = step.observation({"observation.images.front": non_image})
+
+    assert torch.equal(processed["observation.images.front"], non_image)
+
+
 def test_smolvla_newline_processor_single_task():
     """Test NewLineTaskProcessorStep with single task string."""
     processor = NewLineTaskProcessorStep()

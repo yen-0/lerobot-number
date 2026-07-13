@@ -240,6 +240,26 @@ class SmolVLABlueWorldProcessorStep(ObservationProcessorStep):
         )
         return torch.from_numpy(filtered.astype(np.float32) / 255.0).permute(2, 0, 1).contiguous()
 
+    def _filter_image_value(self, value: torch.Tensor | np.ndarray) -> torch.Tensor | None:
+        array_shape = tuple(value.shape)
+        if len(array_shape) < 3:
+            return None
+
+        trailing_shape = array_shape[-3:]
+        if trailing_shape[0] not in {1, 3} and trailing_shape[-1] not in {1, 3}:
+            return None
+
+        if len(array_shape) == 3:
+            return self._filter_single_image(value)
+
+        if isinstance(value, torch.Tensor):
+            flat = value.reshape(-1, *trailing_shape)
+        else:
+            flat = np.reshape(value, (-1, *trailing_shape))
+
+        filtered = torch.stack([self._filter_single_image(sample) for sample in flat], dim=0)
+        return filtered.reshape(*array_shape[:-3], *filtered.shape[-3:])
+
     def observation(self, observation: dict[str, Any]) -> dict[str, Any]:
         filtered_observation = observation.copy()
         keys_to_filter = self.image_keys or []
@@ -247,12 +267,10 @@ class SmolVLABlueWorldProcessorStep(ObservationProcessorStep):
             if key == self.target_image_key or key not in observation:
                 continue
             value = observation[key]
-            if isinstance(value, torch.Tensor) and value.ndim == 4:
-                filtered_observation[key] = torch.stack([self._filter_single_image(sample) for sample in value], dim=0)
-            elif isinstance(value, np.ndarray) and value.ndim == 4:
-                filtered_observation[key] = torch.stack([self._filter_single_image(sample) for sample in value], dim=0)
-            else:
-                filtered_observation[key] = self._filter_single_image(value)
+            if isinstance(value, (torch.Tensor, np.ndarray)):
+                filtered = self._filter_image_value(value)
+                if filtered is not None:
+                    filtered_observation[key] = filtered
         return filtered_observation
 
     def get_config(self) -> dict[str, Any]:
