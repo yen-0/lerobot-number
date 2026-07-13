@@ -157,9 +157,9 @@ def test_smolvla_goal_image_processor_uses_target_drawing_path(tmp_path, monkeyp
 
     loaded = processed["observation.target_drawing"]
     assert isinstance(loaded, torch.Tensor)
-    assert loaded.shape == (3, 2, 2)
-    assert torch.equal(loaded[:, 0, 0], torch.tensor([0.0, 0.0, 1.0]))
-    assert torch.equal(loaded[:, 0, 1], torch.tensor([1.0, 1.0, 1.0]))
+    assert loaded.shape == (1, 3, 2, 2)
+    assert torch.equal(loaded[0, :, 0, 0], torch.tensor([0.0, 0.0, 1.0]))
+    assert torch.equal(loaded[0, :, 0, 1], torch.tensor([1.0, 1.0, 1.0]))
 
 
 def test_smolvla_blue_world_processor_filters_camera_observation():

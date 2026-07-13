@@ -123,7 +123,7 @@ class SmolVLAGoalImageProcessorStep(ObservationProcessorStep):
                 "or provide 'image_path' in the processor config."
             )
 
-        loaded = self._load_image(str(image_path))
+        loaded = self._load_image(str(image_path)).unsqueeze(0)
         observation = observation.copy()
         observation[self.image_key] = loaded
         return observation
