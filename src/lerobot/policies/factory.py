@@ -63,6 +63,40 @@ from .wall_x.configuration_wall_x import WallXConfig
 from .xvla.configuration_xvla import XVLAConfig
 
 
+def _ensure_policy_processor_registry_loaded(policy_cfg: PreTrainedConfig) -> None:
+    """Import the policy-specific processor module so custom registry steps are available."""
+    if isinstance(policy_cfg, TDMPCConfig):
+        from .tdmpc import processor_tdmpc  # noqa: F401
+    elif isinstance(policy_cfg, DiffusionConfig):
+        from .diffusion import processor_diffusion  # noqa: F401
+    elif isinstance(policy_cfg, ACTConfig):
+        from .act import processor_act  # noqa: F401
+    elif isinstance(policy_cfg, MultiTaskDiTConfig):
+        from .multi_task_dit import processor_multi_task_dit  # noqa: F401
+    elif isinstance(policy_cfg, VQBeTConfig):
+        from .vqbet import processor_vqbet  # noqa: F401
+    elif isinstance(policy_cfg, PI0Config):
+        from .pi0 import processor_pi0  # noqa: F401
+    elif isinstance(policy_cfg, PI05Config):
+        from .pi05 import processor_pi05  # noqa: F401
+    elif isinstance(policy_cfg, GaussianActorConfig):
+        from .gaussian_actor import processor_gaussian_actor  # noqa: F401
+    elif isinstance(policy_cfg, SmolVLAConfig):
+        from .smolvla import processor_smolvla  # noqa: F401
+    elif isinstance(policy_cfg, GrootConfig):
+        from .groot import processor_groot  # noqa: F401
+    elif isinstance(policy_cfg, XVLAConfig):
+        from .xvla import processor_xvla  # noqa: F401
+    elif isinstance(policy_cfg, WallXConfig):
+        from .wall_x import processor_wall_x  # noqa: F401
+    elif isinstance(policy_cfg, EO1Config):
+        from .eo1 import processor_eo1  # noqa: F401
+    elif isinstance(policy_cfg, MolmoAct2Config):
+        from .molmoact2 import processor_molmoact2  # noqa: F401
+    elif isinstance(policy_cfg, VLAJEPAConfig):
+        from .vla_jepa import processor_vla_jepa  # noqa: F401
+
+
 def _reconnect_relative_absolute_steps(
     preprocessor: PolicyProcessorPipeline, postprocessor: PolicyProcessorPipeline
 ) -> None:
@@ -282,6 +316,7 @@ def make_pre_post_processors(
             policy configuration type.
     """
     if pretrained_path:
+        _ensure_policy_processor_registry_loaded(policy_cfg)
         # TODO(Steven): Temporary patch, implement correctly the processors for Gr00t
         if isinstance(policy_cfg, GrootConfig):
             # GROOT handles normalization in groot_pack_inputs_v3 step
