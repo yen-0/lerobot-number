@@ -13,20 +13,15 @@ if [[ -f "${REPO_ROOT}/config.shared.env" ]]; then
 fi
 
 EVAL_POLICY_REPO_ID="yen-0/smolvla-so101-digits-0707"
+EVAL_POLICY_REVISION="725ad96569110dc3d62c6dee08476d977deb3b8d"
+EXPERIMENT_NAME="combined"
 INFERENCE_TYPE="${INFERENCE_TYPE:-rtc}"
 DATASET_NUM_EPISODES=10
 GOAL_IMAGE_DIR="${REPO_ROOT}/target_drawings_tasks"
 TASK_DRAW_TIAN=$'draw\u7530'
 
-EXPERIMENTS=(base blue combined)
 TASKS=(writeA draw15 draw55 drawSquare drawCircle drawFace drawHuman "${TASK_DRAW_TIAN}")
 TASK_MODES=(with_goal no_goal)
-
-declare -A EXPERIMENT_REVISION=(
-  [base]="fb91d44a811352c6fb4392d818fb6bedba93ad6c"
-  [blue]="40eb626c785eac9f16b6afb20b3b1dcfa0e88e32"
-  [combined]="725ad96569110dc3d62c6dee08476d977deb3b8d"
-)
 
 declare -A TASK_IMAGE_PATH=(
   [writeA]="${GOAL_IMAGE_DIR}/write_a.png"
@@ -44,11 +39,9 @@ slugify() {
 }
 
 run_rollout() {
-  local experiment="$1"
-  local task_name="$2"
-  local mode="$3"
-  local target_image="$4"
-  local revision="$5"
+  local task_name="$1"
+  local mode="$2"
+  local target_image="$3"
   local owner task_slug dataset_repo_id timestamp
 
   if [[ "${mode}" == "with_goal" && ! -f "${target_image}" ]]; then
@@ -59,7 +52,7 @@ run_rollout() {
   owner="${EVAL_POLICY_REPO_ID%%/*}"
   task_slug="$(slugify "${task_name}")"
   timestamp="$(date +%Y%m%d_%H%M%S)"
-  dataset_repo_id="${owner}/rollout-${experiment}-${task_slug}-${mode}-${timestamp}"
+  dataset_repo_id="${owner}/rollout-${EXPERIMENT_NAME}-${task_slug}-${mode}-${timestamp}"
 
   if [[ "${mode}" == "with_goal" ]]; then
     export TARGET_DRAWING_PATH="${target_image}"
@@ -67,7 +60,7 @@ run_rollout() {
     unset TARGET_DRAWING_PATH
   fi
 
-  echo "[$(date -Is)] Starting ${experiment} rollout for ${task_name} (${mode})"
+  echo "[$(date -Is)] Starting ${EXPERIMENT_NAME} rollout for ${task_name} (${mode})"
   if [[ "${mode}" == "with_goal" ]]; then
     echo "[$(date -Is)] Goal image: ${TARGET_DRAWING_PATH}"
   else
@@ -89,20 +82,18 @@ run_rollout() {
     --dataset.streaming_encoding=true \
     --dataset.encoder_threads=2 \
     --policy.path="${EVAL_POLICY_REPO_ID}" \
-    --policy.pretrained_revision="${revision}" \
+    --policy.pretrained_revision="${EVAL_POLICY_REVISION}" \
     --policy.n_action_steps=50
 }
 
 failures=()
 
-for experiment in "${EXPERIMENTS[@]}"; do
-  for task_name in "${TASKS[@]}"; do
-    for mode in "${TASK_MODES[@]}"; do
-      if ! run_rollout "${experiment}" "${task_name}" "${mode}" "${TASK_IMAGE_PATH[${task_name}]}" "${EXPERIMENT_REVISION[${experiment}]}"; then
-        failures+=("${experiment}:${task_name}:${mode}")
-        echo "[$(date -Is)] Failed ${experiment}:${task_name}:${mode}" >&2
-      fi
-    done
+for task_name in "${TASKS[@]}"; do
+  for mode in "${TASK_MODES[@]}"; do
+    if ! run_rollout "${task_name}" "${mode}" "${TASK_IMAGE_PATH[${task_name}]}"; then
+      failures+=("${task_name}:${mode}")
+      echo "[$(date -Is)] Failed ${EXPERIMENT_NAME}:${task_name}:${mode}" >&2
+    fi
   done
 done
 
@@ -112,4 +103,4 @@ if (( ${#failures[@]} > 0 )); then
   exit 1
 fi
 
-echo "[$(date -Is)] Completed all experiment-task rollouts"
+echo "[$(date -Is)] Completed all ${EXPERIMENT_NAME} task rollouts"
