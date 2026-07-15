@@ -56,16 +56,22 @@ class SmolVLADigitLabelProcessorStep(ComplementaryDataProcessorStep):
     digit_label_key: str = "digit_label"
     task_key: str = "task"
     digit_map: dict[str, int] | None = None
+    allow_unmapped_tasks: bool = True
 
     def complementary_data(self, complementary_data: dict[str, Any]) -> dict[str, Any]:
         task = complementary_data.get(self.task_key)
         if task is None:
             raise ValueError(f"Missing '{self.task_key}' in complementary data.")
 
-        if isinstance(task, (list, tuple)):
-            labels = [resolve_digit_label(item, self.digit_map) for item in task]
-        else:
-            labels = [resolve_digit_label(task, self.digit_map)]
+        try:
+            if isinstance(task, (list, tuple)):
+                labels = [resolve_digit_label(item, self.digit_map) for item in task]
+            else:
+                labels = [resolve_digit_label(task, self.digit_map)]
+        except ValueError:
+            if self.allow_unmapped_tasks:
+                return complementary_data
+            raise
 
         complementary_data[self.digit_label_key] = torch.tensor(labels, dtype=torch.long)
         return complementary_data
@@ -75,6 +81,7 @@ class SmolVLADigitLabelProcessorStep(ComplementaryDataProcessorStep):
             "digit_label_key": self.digit_label_key,
             "task_key": self.task_key,
             "digit_map": self.digit_map,
+            "allow_unmapped_tasks": self.allow_unmapped_tasks,
         }
 
     def transform_features(self, features):
@@ -155,6 +162,23 @@ class SmolVLABlueWorldProcessorStep(ObservationProcessorStep):
     target_image_key: str = "observation.target_drawing"
     image_keys: list[str] | None = None
 
+    def _resolve_image_keys(self, observation: dict[str, Any]) -> list[str]:
+        if self.image_keys:
+            keys_to_filter = [key for key in self.image_keys if key in observation]
+        else:
+            keys_to_filter = [
+                key
+                for key, value in observation.items()
+                if isinstance(value, (torch.Tensor, np.ndarray)) and self._filter_image_value(value) is not None
+            ]
+
+        if self.target_image_key in observation and self.target_image_key not in keys_to_filter:
+            target_value = observation[self.target_image_key]
+            if isinstance(target_value, (torch.Tensor, np.ndarray)) and self._filter_image_value(target_value) is not None:
+                keys_to_filter.append(self.target_image_key)
+
+        return keys_to_filter
+
     def _filter_single_image(self, image: torch.Tensor | np.ndarray) -> torch.Tensor:
         filtered = blue_mask_image(
             image,
@@ -190,9 +214,9 @@ class SmolVLABlueWorldProcessorStep(ObservationProcessorStep):
 
     def observation(self, observation: dict[str, Any]) -> dict[str, Any]:
         filtered_observation = observation.copy()
-        keys_to_filter = self.image_keys or []
+        keys_to_filter = self._resolve_image_keys(observation)
         for key in keys_to_filter:
-            if key == self.target_image_key or key not in observation:
+            if key not in observation:
                 continue
             value = observation[key]
             if isinstance(value, (torch.Tensor, np.ndarray)):
@@ -257,7 +281,7 @@ def make_smolvla_pre_post_processors(
         image_keys = [
             key
             for key, feature in config.input_features.items()
-            if feature.type == FeatureType.VISUAL and key != "observation.target_drawing"
+            if feature.type == FeatureType.VISUAL
         ]
         input_steps.append(
             SmolVLABlueWorldProcessorStep(

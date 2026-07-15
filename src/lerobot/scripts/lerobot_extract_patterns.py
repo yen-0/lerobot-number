@@ -60,6 +60,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("EXTRACT_CAMERA_KEY"),
         help="Optional camera key override. Defaults to the first non-wrist camera in the dataset.",
     )
+    parser.add_argument(
+        "--max-episodes",
+        type=int,
+        default=int(os.environ.get("EXTRACT_MAX_EPISODES", "0")),
+        help="Optional limit on how many episodes to export. Defaults to EXTRACT_MAX_EPISODES or all episodes.",
+    )
     return parser
 
 
@@ -102,9 +108,12 @@ def main():
 
     x_min, y_min, x_max, y_max = crop_coords
     out_dir.mkdir(parents=True, exist_ok=True)
+    max_episodes = args.max_episodes if args.max_episodes and args.max_episodes > 0 else src_dataset.num_episodes
+    max_episodes = min(max_episodes, src_dataset.num_episodes)
 
     logging.info("Extracting target drawings to: %s", out_dir)
-    for ep_idx in range(src_dataset.num_episodes):
+    logging.info("Exporting %s episode PNGs", max_episodes)
+    for ep_idx in range(max_episodes):
         to_idx = src_dataset.meta.episodes["dataset_to_index"][ep_idx]
         last_frame_idx = to_idx - 1
 
@@ -120,7 +129,7 @@ def main():
         out_path = out_dir / f"episode_{ep_idx}.png"
         cropped_pil.save(out_path)
         if (ep_idx + 1) % 10 == 0 or ep_idx == 0:
-            logging.info("Saved episode %s/%s target drawing to %s", ep_idx + 1, src_dataset.num_episodes, out_path)
+            logging.info("Saved episode %s/%s target drawing to %s", ep_idx + 1, max_episodes, out_path)
 
     logging.info("Target drawings extraction completed successfully!")
 

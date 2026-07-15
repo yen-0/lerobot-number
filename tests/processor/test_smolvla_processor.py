@@ -184,13 +184,44 @@ def test_smolvla_blue_world_processor_filters_camera_observation():
 
     processed = step.observation(observation)
     filtered = processed["observation.images.front"].cpu().numpy()
+    filtered_target = processed["observation.target_drawing"]
 
     assert filtered.shape == (2, 3, 2, 2)
     assert np.allclose(filtered[0, :, 0, 0], [0.0, 0.0, 1.0])
     assert np.allclose(filtered[0, :, 0, 1], [1.0, 1.0, 1.0])
     assert np.allclose(filtered[1, :, 0, 0], [1.0, 1.0, 1.0])
     assert np.allclose(filtered[1, :, 0, 1], [0.0, 0.0, 1.0])
-    assert torch.equal(processed["observation.target_drawing"], torch.ones(2, 3, 2, 2))
+    assert filtered_target.shape == (2, 3, 2, 2)
+    assert torch.allclose(filtered_target[0, :, 0, 0], torch.ones(3))
+    assert torch.allclose(filtered_target[0, :, 0, 1], torch.ones(3))
+
+
+def test_smolvla_blue_world_processor_filters_target_drawing_even_if_not_in_image_keys():
+    step = SmolVLABlueWorldProcessorStep(image_keys=["observation.images.front"])
+    observation = {
+        "observation.images.front": torch.tensor(
+            [[[[0.0, 1.0], [0.0, 1.0]], [[0.0, 1.0], [0.0, 1.0]], [[1.0, 1.0], [1.0, 1.0]]]],
+            dtype=torch.float32,
+        ),
+        "observation.target_drawing": torch.tensor(
+            [[[[0.0, 1.0], [1.0, 1.0]], [[0.0, 1.0], [1.0, 1.0]], [[1.0, 1.0], [1.0, 1.0]]]],
+            dtype=torch.float32,
+        ),
+    }
+
+    processed = step.observation(observation)
+
+    assert torch.allclose(processed["observation.target_drawing"][0, :, 0, 0], torch.tensor([0.0, 0.0, 1.0]))
+    assert torch.allclose(processed["observation.target_drawing"][0, :, 0, 1], torch.tensor([1.0, 1.0, 1.0]))
+
+
+def test_smolvla_digit_label_processor_allows_unmapped_tasks():
+    step = SmolVLADigitLabelProcessorStep()
+
+    complementary_data = {"task": "drawFace"}
+    processed = step.complementary_data(complementary_data)
+
+    assert processed == complementary_data
 
 
 def test_smolvla_blue_world_processor_filters_time_stacked_camera_observation():

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,9 +13,9 @@ if [[ -f "${REPO_ROOT}/config.shared.env" ]]; then
 fi
 
 EVAL_POLICY_REPO_ID="yen-0/smolvla-so101-digits-0707"
-EVAL_POLICY_REVISION="40eb626c785eac9f16b6afb20b3b1dcfa0e88e32"
+EVAL_POLICY_REVISION="725ad96569110dc3d62c6dee08476d977deb3b8d"
 
-TARGET_DRAWING_PATH="${TARGET_DRAWING_PATH:-${REPO_ROOT}/target_drawings/episode_0.png}"
+TARGET_DRAWING_PATH="${TARGET_DRAWING_PATH:-${REPO_ROOT}/target_drawings_combined_blue_world/episode_0.png}"
 export TARGET_DRAWING_PATH
 
 ROLL_OUT_TASK="${DATASET_SINGLE_TASK:-write2}"
@@ -23,7 +23,7 @@ ROLLOUT_TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 ROLLOUT_OWNER="${EVAL_POLICY_REPO_ID%%/*}"
 ROLLOUT_TASK_SLUG="$(printf '%s' "${ROLL_OUT_TASK}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g')"
 ROLLOUT_TASK_SLUG="${ROLLOUT_TASK_SLUG:-task}"
-ROLLOUT_DATASET_REPO_ID="${ROLLOUT_OWNER}/rollout-${ROLLOUT_TASK_SLUG}-blue-world-${ROLLOUT_TIMESTAMP}"
+ROLLOUT_DATASET_REPO_ID="${ROLLOUT_OWNER}/rollout-${ROLLOUT_TASK_SLUG}-combined-blue-world-${ROLLOUT_TIMESTAMP}"
 
 uv run lerobot-rollout \
 --strategy.type=episodic \
