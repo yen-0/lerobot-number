@@ -1,0 +1,191 @@
+#!/bin/bash
+#PBS -N action_path_mnist_probe_0707
+#PBS -q regular-g
+#PBS -W group_list=gw13
+#PBS -l select=1:ncpus=16:mem=60gb
+#PBS -l walltime=04:00:00
+#PBS -j oe
+
+set -euo pipefail
+
+PBS_O_WORKDIR="${PBS_O_WORKDIR:-$(pwd)}"
+cd "${PBS_O_WORKDIR}"
+
+TEACHER_REPO_ID_OVERRIDE="${TEACHER_REPO_ID:-}"
+HUB_REPO_ID_OVERRIDE="${HUB_REPO_ID:-}"
+OUTPUT_DIR_OVERRIDE="${OUTPUT_DIR:-}"
+JOB_NAME_OVERRIDE="${JOB_NAME:-}"
+DEVICE_OVERRIDE="${DEVICE:-}"
+TEACHER_DEVICE_OVERRIDE="${TEACHER_DEVICE:-}"
+BATCH_SIZE_OVERRIDE="${BATCH_SIZE:-}"
+NUM_WORKERS_OVERRIDE="${NUM_WORKERS:-}"
+SEED_OVERRIDE="${SEED:-}"
+MNIST_ROOT_OVERRIDE="${MNIST_ROOT:-}"
+PROBE_TRAIN_SUBSET_OVERRIDE="${PROBE_TRAIN_SUBSET:-}"
+PROBE_EVAL_SUBSET_OVERRIDE="${PROBE_EVAL_SUBSET:-}"
+RIDGE_L2_OVERRIDE="${RIDGE_L2:-}"
+ACTION_TIMESTEP_OVERRIDE="${ACTION_TIMESTEP:-}"
+CACHE_DIR_OVERRIDE="${CACHE_DIR:-}"
+LOCAL_FILES_ONLY_OVERRIDE="${LOCAL_FILES_ONLY:-}"
+HF_TOKEN_OVERRIDE="${HF_TOKEN:-}"
+PUSH_TO_HUB_OVERRIDE="${PUSH_TO_HUB:-}"
+HUB_ONLY_OVERRIDE="${HUB_ONLY:-}"
+
+if [[ -f config.env ]]; then
+  source config.env
+fi
+if [[ -f config.shared.env ]]; then
+  source config.shared.env
+fi
+
+TEACHER_REPO_ID="${TEACHER_REPO_ID_OVERRIDE:-${TEACHER_REPO_ID:-yen-0/smolvla-so101-digits-0707}}"
+HUB_REPO_ID="${HUB_REPO_ID_OVERRIDE:-${HUB_REPO_ID:-yen-0/smolvla-0707-action-path-mnist-probe}}"
+OUTPUT_DIR="${OUTPUT_DIR_OVERRIDE:-${OUTPUT_DIR:-./outputs/action_path_mnist_probe_0707}}"
+JOB_NAME="${JOB_NAME_OVERRIDE:-${JOB_NAME:-action_path_mnist_probe_0707}}"
+DEVICE="${DEVICE_OVERRIDE:-${DEVICE:-cuda}}"
+TEACHER_DEVICE="${TEACHER_DEVICE_OVERRIDE:-${TEACHER_DEVICE:-$DEVICE}}"
+BATCH_SIZE="${BATCH_SIZE_OVERRIDE:-${BATCH_SIZE:-4}}"
+NUM_WORKERS="${NUM_WORKERS_OVERRIDE:-${NUM_WORKERS:-4}}"
+SEED="${SEED_OVERRIDE:-${SEED:-42}}"
+MNIST_ROOT="${MNIST_ROOT_OVERRIDE:-${MNIST_ROOT:-.cache/mnist}}"
+PROBE_TRAIN_SUBSET="${PROBE_TRAIN_SUBSET_OVERRIDE:-${PROBE_TRAIN_SUBSET:-5000}}"
+PROBE_EVAL_SUBSET="${PROBE_EVAL_SUBSET_OVERRIDE:-${PROBE_EVAL_SUBSET:-2000}}"
+RIDGE_L2="${RIDGE_L2_OVERRIDE:-${RIDGE_L2:-1e-2}}"
+ACTION_TIMESTEP="${ACTION_TIMESTEP_OVERRIDE:-${ACTION_TIMESTEP:-0.5}}"
+CACHE_DIR="${CACHE_DIR_OVERRIDE:-${CACHE_DIR:-}}"
+LOCAL_FILES_ONLY="${LOCAL_FILES_ONLY_OVERRIDE:-${LOCAL_FILES_ONLY:-false}}"
+HF_TOKEN="${HF_TOKEN_OVERRIDE:-${HF_TOKEN:-}}"
+PUSH_TO_HUB="${PUSH_TO_HUB_OVERRIDE:-${PUSH_TO_HUB:-true}}"
+HUB_ONLY="${HUB_ONLY_OVERRIDE:-${HUB_ONLY:-true}}"
+
+if [[ -z "${HF_TOKEN}" || "${HF_TOKEN}" == "hf_YOUR_TOKEN_HERE" ]]; then
+  echo "[WARNING] HF_TOKEN is not set. Put it in ignored config.env if the teacher repo is private." >&2
+fi
+
+if [[ -d "/work/gw13/w13009" ]]; then
+  SHARED_CACHE_BASE="/work/gw13/w13009/.cache"
+else
+  SHARED_CACHE_BASE="$HOME/.cache"
+fi
+
+if [[ -n "${TMPDIR:-}" ]]; then
+  LOCAL_CACHE="${TMPDIR}/.cache"
+else
+  LOCAL_CACHE="/tmp/$(whoami)/.cache"
+fi
+
+mkdir -p "${LOCAL_CACHE}/huggingface"
+mkdir -p "${LOCAL_CACHE}/lerobot"
+mkdir -p "${LOCAL_CACHE}/torch"
+
+if [[ -d "${SHARED_CACHE_BASE}/huggingface" ]]; then
+  rsync -a --exclude='*.lock' "${SHARED_CACHE_BASE}/huggingface/" "${LOCAL_CACHE}/huggingface/"
+fi
+
+export HF_HOME="${LOCAL_CACHE}/huggingface"
+export HF_HUB_CACHE="${LOCAL_CACHE}/huggingface/hub"
+export HF_DATASETS_CACHE="${LOCAL_CACHE}/huggingface/datasets"
+export HF_LEROBOT_HOME="${LOCAL_CACHE}/lerobot"
+export TORCH_HOME="${LOCAL_CACHE}/torch"
+export PYTHONPATH="${PYTHONPATH:-}:$(pwd)/src:$(pwd)/examples/training"
+export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
+export APPTAINERENV_HF_HOME="$HF_HOME"
+export APPTAINERENV_HF_HUB_CACHE="$HF_HUB_CACHE"
+export APPTAINERENV_HF_DATASETS_CACHE="$HF_DATASETS_CACHE"
+export APPTAINERENV_HF_LEROBOT_HOME="$HF_LEROBOT_HOME"
+export APPTAINERENV_TORCH_HOME="$TORCH_HOME"
+export APPTAINERENV_PYTHONPATH="$PYTHONPATH"
+export APPTAINERENV_PYTHONUNBUFFERED=1
+export APPTAINERENV_OMP_NUM_THREADS="$OMP_NUM_THREADS"
+export APPTAINERENV_MKL_NUM_THREADS="$MKL_NUM_THREADS"
+export APPTAINERENV_OPENBLAS_NUM_THREADS="$OPENBLAS_NUM_THREADS"
+export APPTAINERENV_NUMEXPR_NUM_THREADS="$NUMEXPR_NUM_THREADS"
+export APPTAINERENV_PBS_O_WORKDIR="${PBS_O_WORKDIR}"
+
+if [[ -n "${HF_TOKEN}" ]]; then
+  export APPTAINERENV_HF_TOKEN="$HF_TOKEN"
+fi
+
+module load "${APPTAINER_MODULE}"
+
+ARGS=(
+  --teacher.repo_id="${TEACHER_REPO_ID}"
+  --hub_repo_id="${HUB_REPO_ID}"
+  --output_dir="${OUTPUT_DIR}"
+  --job_name="${JOB_NAME}"
+  --device="${DEVICE}"
+  --teacher.device="${TEACHER_DEVICE}"
+  --batch_size="${BATCH_SIZE}"
+  --num_workers="${NUM_WORKERS}"
+  --seed="${SEED}"
+  --mnist_root="${MNIST_ROOT}"
+  --probe_train_subset="${PROBE_TRAIN_SUBSET}"
+  --probe_eval_subset="${PROBE_EVAL_SUBSET}"
+  --ridge_l2="${RIDGE_L2}"
+  --action_timestep="${ACTION_TIMESTEP}"
+)
+
+if [[ -n "${CACHE_DIR}" ]]; then
+  ARGS+=(--cache_dir="${CACHE_DIR}")
+fi
+
+if [[ "${LOCAL_FILES_ONLY}" == "true" ]]; then
+  ARGS+=(--local_files_only)
+fi
+
+if [[ "${PUSH_TO_HUB}" == "true" ]]; then
+  ARGS+=(--push_to_hub)
+else
+  ARGS+=(--no-push-to-hub)
+fi
+
+if [[ "${HUB_ONLY}" == "true" ]]; then
+  ARGS+=(--hub_only)
+else
+  ARGS+=(--no-hub-only)
+fi
+
+LOG_DIR="${PBS_O_WORKDIR}/logs"
+mkdir -p "${LOG_DIR}"
+LOG_FILE="${LOG_DIR}/action_path_mnist_probe_0707_${PBS_JOBID:-manual}_$(date +%Y%m%d_%H%M%S).log"
+
+echo "[$(date -Is)] starting MNIST action-path probe job"
+echo "[$(date -Is)] log file: ${LOG_FILE}"
+echo "[$(date -Is)] args: ${ARGS[*]}"
+echo "[$(date -Is)] resolved output dir: ${OUTPUT_DIR}"
+echo "[$(date -Is)] resolved hub repo: ${HUB_REPO_ID}"
+echo "[$(date -Is)] resolved upload folder: action_path_mnist_probe_0707"
+
+BINDS=(
+  --bind "${PBS_O_WORKDIR}:${PBS_O_WORKDIR}:rw"
+  --bind "$HOME:$HOME:rw"
+)
+
+if [[ -d "/work/gw13" ]]; then
+  BINDS+=(--bind "/work/gw13:/work/gw13:rw")
+fi
+
+if [[ "${LOCAL_CACHE}" != "$HOME/.cache" ]]; then
+  BINDS+=(--bind "${LOCAL_CACHE}:${LOCAL_CACHE}:rw")
+fi
+
+cleanup() {
+  status=$?
+  echo "[$(date -Is)] MNIST action-path probe job exiting with status ${status}"
+  if [[ -d "${LOCAL_CACHE}/huggingface" && -n "${SHARED_CACHE_BASE:-}" ]]; then
+    mkdir -p "${SHARED_CACHE_BASE}/huggingface"
+    rsync -a --exclude='*.lock' "${LOCAL_CACHE}/huggingface/" "${SHARED_CACHE_BASE}/huggingface/"
+  fi
+}
+trap cleanup EXIT
+
+apptainer --debug exec --nv \
+  "${BINDS[@]}" \
+  --writable-tmpfs \
+  --pwd "${PBS_O_WORKDIR}" \
+  "${APPTAINER_IMAGE}" \
+  python -u examples/training/eval_mnist_action_probe.py "${ARGS[@]}" 2>&1 | tee -a "${LOG_FILE}"
